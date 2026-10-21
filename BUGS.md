@@ -9,6 +9,7 @@ Fixes are on the `development-jani` branch.
 | 1 | Claude environment test fails: "ACPX provider package … resolves outside the selected provider root" | Fixed | `6263763b1` |
 | 2 | Compose files build the `cloud` image stage instead of `production` | Fixed | `31fbd7271` |
 | 3 | 10 warm-attach tests fail in `runnerd-codex-transport.test.ts` | Open, not investigated | — |
+| 4 | Onboarding: "Paperclip Runner is unavailable for this harness and environment" before a model source is chosen | Open, diagnosed | — |
 
 ## 1. Claude environment test fails in Docker and source builds
 
@@ -61,6 +62,8 @@ Otherwise, as in published npm bundles, the server keeps its own root.
 - In the rebuilt container, `resolveInstalledProviderAuthority` returns root
   `/app` with manifest `/app/server/package.json`, and
   `@agentclientprotocol/claude-agent-acp` resolves without error.
+- After the rebuild, the user got past the Claude environment test in the
+  onboarding flow.
 
 **Review note.** This code decides which installed packages the Runner trusts.
 The change reuses a rule the daemon already applied rather than adding a new
@@ -101,3 +104,31 @@ duplicate".
 **Status.** The same 10 tests fail with the bug 1 change removed, so that
 change does not cause them. The cause has not been investigated; it may be
 environmental, such as a missing native Runner binary.
+
+## 4. Onboarding sends the Runner choice with the placeholder agent (open)
+
+**Symptom.** In onboarding, the web page shows "Paperclip Runner is
+unavailable for this harness and environment. Select Legacy runner in
+Advanced." The server log shows repeated `POST /api/companies/:id/agents`
+returning 422.
+
+**Cause.** Before a model source is chosen, `ui/src/components/OnboardingWizard.tsx`
+creates a placeholder agent with `adapterType: "process"` and
+`metadata.setupAdapterPending: true`. It still sends the wizard's `runner`
+state, which can be `"paperclip"` (for example restored from saved onboarding
+state). In `server/src/services/agent-runner-selection.ts`,
+`resolveNewAgentRunner` treats an explicit `"paperclip"` choice as a request
+for the native Runner, which supports only the Claude and Codex harnesses, so
+the `process` placeholder is rejected with `agent_runner_unavailable`.
+
+Request body seen in the log (abridged):
+`{"adapterType":"process","runner":"paperclip","adapterConfig":{},"metadata":{"setupAdapterPending":true},"onboardingFirstAgent":true}`
+
+**Status.** The error went away without a code change once the wizard state
+changed (for example after choosing a model source, which resets the runner to
+`auto`). The underlying bug remains.
+
+**Proposed fix (not applied).** Send the runner choice only when a source is
+selected, e.g. `runner: sourceSelected ? runner : undefined` in the
+placeholder `agentsApi.create` call, and add a wizard test for a restored
+`"paperclip"` runner with no source selected.

@@ -425,7 +425,8 @@ Local Claude and Codex subscription sign-in also needs Python 3 and the
 corresponding provider CLI on the Paperclip host. The Docker image includes them.
 
 To run Paperclip and PostgreSQL as two Docker containers on a shared network, see
-[doc/DOCKER-POSTGRES-NETWORK.md](doc/DOCKER-POSTGRES-NETWORK.md).
+[doc/DOCKER-POSTGRES-NETWORK.md](doc/DOCKER-POSTGRES-NETWORK.md). Bugs found
+while setting it up, and their fixes, are recorded in [BUGS.md](BUGS.md).
 
 Source development also builds the native Paperclip Runner when enabled (the self-hosted default). Install a Rust toolchain, or set `PAPERCLIP_RUNNER_BINARY` to a compatible prebuilt runner.
 

@@ -114,9 +114,9 @@ The alias uses relative paths, so run it from the project root.
 ## Troubleshooting
 
 - **"ACPX provider package … resolves outside the selected provider root"**
-  when testing a Claude or Codex model: the image was built from the
-  Dockerfile's `cloud` stage. The Compose files pin `target: production`;
-  rebuild with `up -d --build` and test again.
+  when testing a Claude or Codex model: the image predates the fixes recorded
+  in [BUGS.md](../BUGS.md) (bugs 1 and 2). Rebuild from this branch with
+  `up -d --build` and test again.
 - **Connecting to PostgreSQL from the host:** the override removes the host
   port on purpose. Use `pc-compose exec db psql -U paperclip paperclip`, or add
   a `127.0.0.1:5432:5432` port mapping to the `db` service in the override.

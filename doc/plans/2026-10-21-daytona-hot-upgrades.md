@@ -71,7 +71,8 @@ provider `turn/start` distinguishes adoption from interruption-and-resume.
 
 ## State
 
-Implementation is in progress on the branch above; no PR or deployment yet.
+Implementation is in draft PR https://github.com/paperclipai/paperclip/pull/17097.
+No production deployment has been performed.
 
 Verified locally with real PostgreSQL and the Rust runner, using a scripted Codex
 provider (not a live model):
@@ -101,9 +102,32 @@ provider (not a live model):
   added-test attempt failed fixture FK cleanup after the assertions; cleanup
   now removes the finalization row before its run.
 
-Next gates: finish the full repository suite, repeat five-minute recovery on the
-final ownership implementation, then run one exact Daytona
-Product E2E cell via the existing trusted hosted workflow. Local provider/Daytona
+The final ownership implementation also passed the real five-minute repeat
+(`/tmp/daytona-five-minute-final.log`, 323.85 seconds). External Dot/Muse driver
+coverage passed 24 tests, including restoring an empty controller directory and
+retaining the old running artifact without its executable. Review identified
+same-server detach fencing and read-only API response recovery gaps. Detach
+markers now identify each request and clear only after a settled predecessor and
+verified recovery claim; lease-loss callbacks also match their exact lease owner.
+Safe API reads re-enter the current tool authority. Same-server qualification
+exposed a stale warm-cache override that could create an extra provider turn;
+restart recovery now selects the Postgres run checkpoint. Its regression
+intentionally corrupts the local warm projection and asserts one provider start.
+The failed fixture attempts retained in `/tmp/daytona-same-server-*.log` include
+controller-local artifact paths and incomplete remote workspace metadata;
+`/tmp/daytona-same-server-review-final4.log` records the extra-turn failure. Copilot's source-bound identity moves to v54
+while retaining v53 decoding compatibility. CI found two peer mocks missing the
+new persistence methods; the corrected permission suites passed 27 tests.
+
+The first hosted Daytona attempt
+https://github.com/paperclipai/paperclip/actions/runs/39613279281
+failed before sandbox launch: the image publisher exhausted its disk while
+compressing the image. It did not exercise the restart scenario. One fresh
+attempt will target the updated branch.
+
+Next gates: finish the full repository suite, same-server recovery regression,
+current-head CI/review, and one exact Daytona Product E2E cell via the existing
+trusted hosted workflow. Local provider/Daytona
 credentials are absent; hosted qualification is available. Required repository
 checks and PR review remain. The hosted restart case now discards the old
 controller runtime cache before starting the replacement and requires an

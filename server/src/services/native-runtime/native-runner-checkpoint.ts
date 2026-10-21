@@ -1,7 +1,7 @@
 import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { and, eq, gt, notInArray, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, notInArray, sql } from "drizzle-orm";
 import { heartbeatRuns, issues, nativeRunFinalizations, nativeRunnerCheckpoints, type Db } from "@paperclipai/db";
 import type { DurablePrpCheckpoint, DurablePrpControlPlane } from "../../vendor/paperclip-runner/index.js";
 import { localEncryptedProvider } from "../../secrets/local-encrypted-provider.js";
@@ -107,10 +107,22 @@ export function nativeRunnerCheckpointWriter(db: Db, owner: Owner) {
 
 const authorities = new WeakMap<DurablePrpControlPlane, Map<string, ReturnType<typeof nativeRunnerCheckpointWriter>>>();
 
+export function nativeRunnerCheckpointPersistence(db: Db, bootId: string, authorityRunId: string,
+  detach: (runIds: readonly string[], leaseOwner?: string) => Promise<unknown>) {
+  return { db, bootId, authorityRunId, onFailure: async (runId: string, leaseOwner: string) => {
+    try { await detach([runId], leaseOwner); }
+    finally {
+      await db.update(nativeRunFinalizations).set({ leaseExpiresAt: sql`clock_timestamp()` })
+        .where(and(eq(nativeRunFinalizations.runId, runId), eq(nativeRunFinalizations.controllerBootId, bootId), eq(nativeRunFinalizations.leaseOwner, leaseOwner),
+          isNull(nativeRunFinalizations.resultId)));
+    }
+  } };
+}
+
 export async function registerNativeRunnerCheckpoint(input: {
   db: Db; binding: Binding; bootId: string; authority: DurablePrpControlPlane;
   authorityRunId?: string;
-  onFailure?: (runId: string) => Promise<void>;
+  onFailure?: (runId: string, leaseOwner: string) => Promise<void>;
 }): Promise<void> {
   const authorityRunId = input.authorityRunId ?? input.binding.runId;
   const [owner] = await input.db.select().from(nativeRunFinalizations).where(and(
@@ -138,7 +150,7 @@ export async function registerNativeRunnerCheckpoint(input: {
     writers.set(input.binding.runId, async checkpoint => {
       try { await write(checkpoint); }
       catch (error) {
-        void input.onFailure?.(authorityRunId).catch(() => undefined);
+        void input.onFailure?.(authorityRunId, owner.leaseOwner!).catch(() => undefined);
         throw error;
       }
     });

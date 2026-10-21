@@ -30,6 +30,8 @@ vi.mock("../control-plane/durable-prp-control-plane.js", async (importOriginal) 
       disconnectActiveRunner() {}
       persistRunAttachTemplate() {}
       issueBootstrapTicket() { return {}; }
+      async flushCheckpoint() {}
+      async recoverPendingSemanticInputs() {}
       getCommand(id: string) { return this.store.state.commands.find(c => c.commandId === id); }
       queueCommand(type: string, payload: Record<string, unknown>, id = type) {
         this.store.state.commands.push({ type, commandId: id, status: "completed", result: { result: { providerTurnId: payload.turnId } } });

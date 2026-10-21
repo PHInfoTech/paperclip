@@ -76,7 +76,7 @@ import {
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { restoreNativeRunnerCheckpoint } from "./native-runner-checkpoint.js";
+import { nativeRunnerCheckpointPersistence, restoreNativeRunnerCheckpoint } from "./native-runner-checkpoint.js";
 import { recoverNativeSemanticInput } from "./native-semantic-recovery.js";
 import { REMOTE_CONTROLLER_LEASE_MS, REMOTE_RUNNER_RECONNECT_GRACE_MS } from "./native-runner-recovery-contract.js";
 import { basename, dirname, join, posix, resolve } from "node:path";
@@ -247,9 +247,7 @@ export class NativeControllerDetachedForRestartError extends Error {
 
 const activeNativeSessions = new Map<string, ActiveNativeSession>();
 // Shutdown can race provider startup before onSession publishes its handle.
-// Retain the request for the remainder of this controller's lifetime so that
-// the late publication detaches before it can dispatch another turn.
-const nativeRunsDetachingForRestart = new Set<string>();
+const nativeRunsDetachingForRestart = new Map<string, symbol>();
 
 // A restart must not cut authority rotation between archiving the previous
 // runner state and authenticating its replacement. Keep the startup owner
@@ -260,6 +258,8 @@ type NativeSessionStartup = {
   stopRequested?: boolean;
   cancellationSettled?: Promise<void>;
   governedWait?: boolean;
+  priorRestartDetach?: symbol;
+  leaseOwner?: string;
   settled: Promise<void>;
   settle: () => void;
 };
@@ -291,6 +291,7 @@ async function waitForNativeSessionStartup(
 
 export async function detachNativeSessionsForRestart(
   runIds: readonly string[],
+  leaseOwner?: string,
 ): Promise<{
   detachedRunIds: string[];
   inactiveRunIds: string[];
@@ -313,7 +314,11 @@ export async function detachNativeSessionsForRestart(
         })]);
       } finally { clearTimeout(timer); }
     }
-    nativeRunsDetachingForRestart.add(runId);
+    if (leaseOwner !== undefined && nativeSessionStartups.get(runId)?.leaseOwner !== leaseOwner) {
+      inactiveRunIds.push(runId);
+      continue;
+    }
+    nativeRunsDetachingForRestart.set(runId, Symbol("native controller detach"));
     const active = activeNativeSessions.get(runId) ?? await waitForNativeSessionStartup(runId);
     if (!active) {
       inactiveRunIds.push(runId);
@@ -7501,7 +7506,7 @@ function startNativeSessionExecutionLeaseRenewal(input: {
           error instanceof Error
             ? error
             : new Error("native_session_lease_lost");
-        if (input.remote) await detachNativeSessionsForRestart([input.runId]).catch(() => undefined);
+        if (input.remote) await detachNativeSessionsForRestart([input.runId], input.leaseOwner).catch(() => undefined);
         else await cancelNativeSession(input.runId, "native session execution lease lost").catch(() => undefined);
       });
   };
@@ -7620,6 +7625,7 @@ export async function executePaperclipNativeSession(input: {
   let resolveStartup!: (session: ActiveNativeSession | null) => void;
   let settle!: () => void;
   const startup: NativeSessionStartup = {
+    priorRestartDetach: nativeRunsDetachingForRestart.get(runId),
     settled: new Promise<void>(resolve => { settle = resolve; }),
     settle: () => settle(),
     promise: new Promise<ActiveNativeSession | null>(resolve => { resolveStartup = resolve; }),
@@ -8120,6 +8126,12 @@ async function executePaperclipNativeSessionWithinScope(
         }),
       { parentName: "task.prepare" },
     );
+    const startup = nativeSessionStartups.get(input.execution.binding.runId);
+    if (startup) startup.leaseOwner = leaseOwner;
+    if (input.restartRecovery && startup?.priorRestartDetach !== undefined
+      && nativeRunsDetachingForRestart.get(input.execution.binding.runId) === startup.priorRestartDetach) {
+      nativeRunsDetachingForRestart.delete(input.execution.binding.runId);
+    }
     await trace.end(taskPrepareScope);
   } catch (error) {
     await trace.end(taskPrepareScope, { outcome: "failed" });
@@ -8589,7 +8601,7 @@ async function executePaperclipNativeSessionWithinScope(
   let githubAccess: NativeGitHubAccess | undefined;
   let releaseGitHubRun: (() => void) | undefined;
   let persistedWarmSession: PersistedNativeSession | null | undefined;
-  if (warmSessionId !== null && warmConfigDigest !== null) {
+  if (warmSessionId !== null && warmConfigDigest !== null && !input.restartRecovery) {
     const entry = warmNativeSessions.get(warmSessionId);
     if (entry) {
       if (entry.preparingRunId && entry.preparingRunId !== input.execution.binding.runId) throw new Error("native_session_supervisor_busy");
@@ -11520,8 +11532,9 @@ async function prepareRemoteExternalRunner({ input, target, runner, root, identi
   const runnerStateDirectory = posix.join(remoteRoot, "sessions",
     createHash("sha256").update(identity.normalizedSessionId).digest("hex"), "runner");
   const requiredMode = resolveRemoteRunnerTransportMode({ target, runnerIngressAuthorized: input.runnerIngressAuthorized === true });
-  const artifact = readRunnerdArtifactBinding(runnerBinary);
+  const artifact = input.controllerPersistence?.runnerArtifact ?? readRunnerdArtifactBinding(runnerBinary);
   const prepare = async () => {
+    if (input.restartRecovery?.kind === "reattach_remote_runner" && input.controllerPersistence?.runnerArtifact) return;
     if (input.restartRecovery?.kind !== "reattach_remote_runner") {
       if (!input.runnerRemoteBinaryPath?.trim()) {
         const platform = await runner.execute({ command: "sh", args: ["-c", "uname -s; uname -m"], bypassSession: true, timeoutMs: 10000 });
@@ -11586,6 +11599,8 @@ async function prepareRemoteExternalRunner({ input, target, runner, root, identi
   };
   const executionDriver = createNativeRunnerExecutionDriver({
     target, binding: input.execution.binding,
+    controllerPersistence: input.controllerPersistence ? nativeRunnerCheckpointPersistence(
+      input.db, input.controllerPersistence.bootId, input.execution.binding.runId, detachNativeSessionsForRestart) : undefined,
     runnerIngressAuthorized: input.runnerIngressAuthorized,
     runnerPublicUrl: input.runnerPublicUrl,
     runnerCaBundlePath: input.runnerCaBundlePath,
@@ -11751,6 +11766,12 @@ async function createRunnerdBackendWithinSessionClaim(
     const externalExecution = input.execution;
     const externalOptions = {
         stateDirectory: root, runnerBinary: remoteDot?.runnerBinary ?? resolvePaperclipRunnerBinary(),
+        runnerArtifact: input.controllerPersistence?.runnerArtifact,
+        runnerReconnectGraceMs: remoteDot ? REMOTE_RUNNER_RECONNECT_GRACE_MS : undefined,
+        recoverSemanticToolInput: input.controllerPersistence ? (call: Parameters<typeof recoverNativeSemanticInput>[0]["call"]) => recoverNativeSemanticInput({
+          db: input.db, binding: input.execution.binding, call,
+          executeRead: () => authorityEpoch.execute({ tool: call.operationId, callId: call.callId, arguments: call.input }),
+        }) : undefined,
         ...(remoteDot ?? {}),
         identity: { runnerInstanceId: effectiveRunnerInstanceId, environmentLeaseId: effectiveEnvironmentLeaseId,
           runId: input.execution.binding.runId, normalizedSessionId: nativeSessionKey(input.execution),
@@ -13357,18 +13378,8 @@ async function createRunnerdBackendWithinSessionClaim(
             adoptExistingRunner: adoptedProcess,
           },
           target,
-          controllerPersistence: input.controllerPersistence ? {
-            db: input.db, bootId: input.controllerPersistence.bootId, authorityRunId: input.execution.binding.runId,
-            onFailure: async runId => {
-              try { await detachNativeSessionsForRestart([runId]); }
-              finally {
-                await input.db.update(nativeRunFinalizations).set({ leaseExpiresAt: sql`clock_timestamp()` })
-                  .where(and(eq(nativeRunFinalizations.runId, runId),
-                    eq(nativeRunFinalizations.controllerBootId, input.controllerPersistence!.bootId),
-                    isNull(nativeRunFinalizations.resultId)));
-              }
-            },
-          } : undefined,
+          controllerPersistence: input.controllerPersistence ? nativeRunnerCheckpointPersistence(
+            input.db, input.controllerPersistence.bootId, input.execution.binding.runId, detachNativeSessionsForRestart) : undefined,
           binding: input.remoteWarmRecovery
             ? { ...input.execution.binding, runId: input.remoteWarmRecovery.identity.runId }
             : input.execution.binding,

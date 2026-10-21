@@ -53,7 +53,7 @@ import { createRunnerTestTlsTunnel, dockerCommandRunner } from "../../__tests__/
 import { createIsolatedTestHome } from "../../__tests__/helpers/isolated-test-home.js";
 import { finalizeNativeRun } from "./native-run-finalizer.js";
 import { waitForPendingRunFailureReports } from "../run-failure-report.js";
-import { closeIdleWarmNativeSessionsForRestart, executePaperclipNativeSession, NativeControllerDetachedForRestartError } from "./native-session-executor.js";
+import { closeIdleWarmNativeSessionsForRestart, detachNativeSessionsForRestart, executePaperclipNativeSession, NativeControllerDetachedForRestartError } from "./native-session-executor.js";
 import { loadNativeRunnerCheckpoint, registerNativeRunnerCheckpoint, restoreNativeRunnerCheckpoint } from "./native-runner-checkpoint.js";
 import { REMOTE_RUNNER_RECONNECT_GRACE_MS } from "./native-runner-recovery-contract.js";
 import { recoverNativeSemanticInput } from "./native-semantic-recovery.js";
@@ -69,6 +69,7 @@ vi.mock("../../sentry.js", async () => {
 
 import {
   claimNativeRestartRecoveries,
+  currentNativeControllerIdentity,
   type NativeControllerIdentity,
 } from "./native-restart-recovery.js";
 
@@ -308,8 +309,8 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
     };
   }
 
-  it.skipIf(!process.env.PAPERCLIP_TEST_RUNNER_CONTAINER).each(["warm", "hard", "legacy", "changed"])("preserves remote warm continuity across completed turns: %s", async (scenario) => {
-    const hardRestart = scenario !== "warm";
+  it.skipIf(!process.env.PAPERCLIP_TEST_RUNNER_CONTAINER).each(["warm", "hard", "legacy", "changed", "same-server"])("preserves remote warm continuity across completed turns: %s", async (scenario) => {
+    const hardRestart = !["warm", "same-server"].includes(scenario);
     const container = process.env.PAPERCLIP_TEST_RUNNER_CONTAINER!;
     const tunnel = await createRunnerTestTlsTunnel({ port: Number(process.env.PAPERCLIP_TEST_RUNNER_PORT),
       key: process.env.PAPERCLIP_TEST_RUNNER_TLS_KEY!, cert: process.env.NODE_EXTRA_CA_CERTS! });
@@ -374,6 +375,52 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
     let controller: ReturnType<typeof spawn> | undefined;
     try {
       const firstOptions = { ...options, execution, runnerExecutionTarget: target };
+      const executeFirst = async () => {
+        if (scenario !== "same-server") return executePaperclipNativeSession(firstOptions);
+        await fixture.db.update(heartbeatRuns).set({ runnerProfileJson: {
+          ...fixture.preparedProfile, nativeExecutionInput: execution,
+          nativeWorkspaceSync: { schema: "paperclip.native-workspace-sync/v1", state: "prepared",
+            descriptorSha256: "a".repeat(64), baselineSha256: "b".repeat(64),
+            workspaceId: randomUUID(), leaseId: target.leaseId, providerLeaseId: container, remoteCwd },
+        } }).where(eq(heartbeatRuns.id, fixture.runId));
+        let detach: ReturnType<typeof detachNativeSessionsForRestart> | undefined;
+        await expect(executePaperclipNativeSession({ ...firstOptions, onLog: async (stream, text) => {
+          await options.onLog(stream, text);
+          if (!detach && text.includes('"eventType":"turn.started"')) {
+            detach = detachNativeSessionsForRestart([fixture.runId]);
+          }
+        } })).rejects.toBeInstanceOf(NativeControllerDetachedForRestartError);
+        expect(await detach).toMatchObject({ detachedRunIds: [fixture.runId] });
+        const checkpoints = resolve(resolvePaperclipInstanceRoot(), "runtime", "paperclip-runner", "sessions");
+        let staleCaches = 0;
+        for (const name of await readdir(checkpoints)) {
+          if (!name.endsWith(".json")) continue;
+          const path = resolve(checkpoints, name);
+          const cached = JSON.parse(await readFile(path, "utf8"));
+          if (cached.snapshot?.identity?.runId !== fixture.runId) continue;
+          cached.snapshot.activeTurnId = null;
+          cached.snapshot.semanticResult = null;
+          cached.snapshot.terminal = null;
+          cached.snapshot.terminalTurns = [];
+          await writeFile(path, JSON.stringify(cached), { mode: 0o600 });
+          staleCaches++;
+        }
+        expect(staleCaches).toBe(1);
+        const priorProcess = await runner.execute({ command: "sh", args: ["-c", `cat '${remoteCwd}'/.paperclip-runtime/paperclip-runner/sessions/*/runner/runner-process.identity`] });
+        await fixture.db.update(nativeRunFinalizations).set({ leaseExpiresAt: new Date(Date.now() - 1) })
+          .where(eq(nativeRunFinalizations.runId, fixture.runId));
+        const [claim] = await claimNativeRestartRecoveries({ db: fixture.db,
+          controller: await currentNativeControllerIdentity(), restartKind: "hard", runIds: [fixture.runId] });
+        if (!claim || claim.kind !== "reattach_remote_runner") {
+          throw new Error(`same-server claim missing: ${claim && "reason" in claim ? claim.reason : claim?.kind}`);
+        }
+        const result = await executePaperclipNativeSession({ ...firstOptions, leaseOwner: claim.leaseOwner, restartRecovery: claim });
+        const recoveredCalls = await runner.execute({ command: "cat", args: [`${remoteCwd}/provider-calls.log`] });
+        expect(recoveredCalls.stdout.split("\n").filter(line => line === "turn/start")).toHaveLength(1);
+        const nextProcess = await runner.execute({ command: "sh", args: ["-c", `cat '${remoteCwd}'/.paperclip-runtime/paperclip-runner/sessions/*/runner/runner-process.identity`] });
+        expect(nextProcess.stdout).toBe(priorProcess.stdout);
+        return result;
+      };
       const first = hardRestart ? await new Promise<{ exitCode: number | null }>((resolveResult, reject) => {
         controller = spawn(process.execPath, ["--import", createRequire(import.meta.url).resolve("tsx"), resolve("server/src/__tests__/helpers/remote-warm-controller.test-worker.ts")],
           { stdio: ["ignore", "pipe", "pipe", "ipc"], env: process.env });
@@ -389,7 +436,7 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
         });
         controller.send?.({ connectionString: temporary.connectionString, container, ingressUrl: `wss://127.0.0.1:${tunnel.port}`,
           options: { ...firstOptions, db: undefined, onLog: undefined, runnerExecutionTarget: { ...target, runner: undefined } } });
-      }) : await executePaperclipNativeSession(firstOptions);
+      }) : await executeFirst();
       expect(first.exitCode).toBe(0);
       await finalizeNativeRun({ db: fixture.db, runId: fixture.runId, workspaceFinalizeStatus: "succeeded", projectRunStatus: true });
       const snapshot = await runner.execute({ command: "sh", args: ["-c", `cat '${remoteCwd}'/.paperclip-runtime/paperclip-runner/sessions/*/runner/runner-state.json`] });
@@ -621,8 +668,19 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
     await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: { ...call, operationId: "get_task_context" }, executeRead }))
       .resolves.toEqual({ result: { context: "current" } });
     expect(executeRead).toHaveBeenCalledTimes(1);
+    const apiRead = { callId: "api-read", operationId: "call_api", input: { operationId: "GET /api/agents/me" } };
+    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: apiRead, executeRead }))
+      .resolves.toEqual({ result: { context: "current" } });
+    expect(executeRead).toHaveBeenCalledTimes(2);
+    await expect(recoverNativeSemanticInput({ db: fixture.db, binding,
+      call: { ...apiRead, input: { operationId: "POST /api/issues/{id}/comments" } }, executeRead })).resolves.toBeNull();
+    await expect(recoverNativeSemanticInput({ db: fixture.db, binding,
+      call: { ...apiRead, input: { operationId: "GET /unknown" } }, executeRead })).resolves.toBeNull();
+    expect(executeRead).toHaveBeenCalledTimes(2);
     await fixture.db.update(heartbeatRuns).set({ status: "cancelled" }).where(eq(heartbeatRuns.id, fixture.runId));
     await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call, executeRead })).resolves.toBeNull();
+    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: apiRead, executeRead })).resolves.toBeNull();
+    expect(executeRead).toHaveBeenCalledTimes(2);
   });
 
   it("restores encrypted controller authority from Postgres and fences a stale writer", async () => {

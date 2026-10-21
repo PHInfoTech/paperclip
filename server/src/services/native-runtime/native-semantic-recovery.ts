@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@paperclipai/db";
 import { canonicalJson } from "@paperclipai/shared";
+import { runnerApiCatalog } from "./runner-api-catalog.js";
 import { localEncryptedProvider } from "../../secrets/local-encrypted-provider.js";
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -34,6 +35,10 @@ export async function recoverNativeSemanticInput(input: {
 
   const callKey = createHash("sha256").update(call.callId).digest("hex");
   if (call.operationId === "call_api") {
+    const operation = runnerApiCatalog().find(entry => entry.operationId === argumentsRecord.operationId);
+    if (operation?.transport === "rest" && ["GET", "HEAD", "OPTIONS"].includes(operation.method)) {
+      return { result: await input.executeRead() };
+    }
     const api = record(record(run.result?.apiToolReceipts)[callKey]);
     if (api.state !== "completed" || api.digest !== digest(call.input)) return null;
     const result = api.encryptedResult

@@ -1,0 +1,14 @@
+# Hermes Agent configuration for the Docker stack. docker/docker-compose.network.yml
+# mounts it read-only and copies it to /paperclip/.hermes/config.yaml on every
+# server start, so edit it here and restart the server to apply changes.
+#
+# Routes Hermes through the host's Switchyard router (OpenAI-compatible).
+# `default` is used when an agent sets no model. An agent's model setting is
+# passed as `hermes chat -m <model>` and overrides it, so any Switchyard route
+# can be chosen per agent, e.g. switchyard/qwen38 or switchyard/ultra-qwen38.
+# Switchyard needs the full `switchyard/<route>` id.
+model:
+  default: switchyard/deepseek-flash-qwen38
+  provider: custom
+  base_url: http://host.docker.internal:4000/v1
+  api_key: local

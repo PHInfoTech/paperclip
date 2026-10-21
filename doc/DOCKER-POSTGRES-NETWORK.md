@@ -107,8 +107,11 @@ The alias uses relative paths, so run it from the project root.
 ## Local models through Switchyard
 
 The override also makes the host's local Switchyard router
-(`http://localhost:4000/v1`, OpenAI-compatible) available to **OpenCode**
-agents:
+(`http://localhost:4000/v1`, OpenAI-compatible) available to **OpenCode** and
+**Hermes** agents.
+
+### OpenCode agents
+
 
 - `extra_hosts: host.docker.internal:host-gateway` lets the container reach
   services published on the host, as `http://host.docker.internal:<port>`.
@@ -130,7 +133,35 @@ Check from inside the container:
 pc-compose exec -u node server opencode models | grep '^switchyard/'
 ```
 
-Other harnesses can use custom OpenAI-compatible providers through
+### Hermes agents
+
+The override builds the `production-hermes` image target: the standard image
+plus the Hermes Agent CLI (pinned `hermes-agent` release in
+`/opt/hermes`, linked as `hermes`), which the built-in `hermes_local` adapter
+launches.
+
+Hermes reads its provider from `$HOME/.hermes/config.yaml`. The repository
+copy, `docker/hermes/config.yaml`, points it at Switchyard with
+`switchyard/deepseek-flash-qwen38` as the default. It is mounted read-only at
+`/etc/paperclip/hermes/config.yaml` and copied to
+`/paperclip/.hermes/config.yaml` on every start, so edit the repository file
+and restart the server to apply a change. Hermes keeps its sessions and memory
+in `/paperclip/.hermes`, inside the data volume.
+
+To use it, choose the **Hermes** (local) harness and set the agent's model to
+any full Switchyard id, such as `switchyard/qwen38`. Paperclip passes it as
+`hermes chat -m <model>`, which overrides the default. An agent without a model
+uses the default.
+
+Do not mount files read-only anywhere under `/paperclip`: the entrypoint repairs
+ownership of that tree on start and exits when it cannot change a file.
+
+To upgrade Hermes, change `HERMES_AGENT_VERSION` in the Dockerfile's
+`production-hermes` stage and rebuild with `up -d --build`.
+
+### Other harnesses
+
+Codex and Pi can use custom OpenAI-compatible providers through
 `PAPERCLIP_CODEX_PROVIDERS` and `PAPERCLIP_PI_PROVIDERS`; they are not
 configured here. Codex would need a per-agent provider selection, because a
 server-wide one would also redirect Codex subscription agents.

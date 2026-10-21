@@ -4,8 +4,8 @@
 #
 #   docker compose -p paperclip -f docker/docker-compose.yml -f docker/docker-compose.network.yml up -d --build
 #
-# It also exposes the host's Switchyard router to OpenCode agents (see
-# doc/DOCKER-POSTGRES-NETWORK.md, "Local models through Switchyard").
+# It also exposes the host's Switchyard router to OpenCode and Hermes agents
+# (see doc/DOCKER-POSTGRES-NETWORK.md, "Local models through Switchyard").
 services:
   db:
     ports: !reset []
@@ -13,6 +13,20 @@ services:
       - paperclip-net
 
   server:
+    # The production image plus the Hermes Agent CLI for `hermes_local` agents.
+    build:
+      target: production-hermes
+    volumes:
+      # Hermes reads its provider from $HOME/.hermes/config.yaml (HOME=/paperclip).
+      # Mounted outside /paperclip: the entrypoint repairs ownership of that tree
+      # and fails on a read-only file inside it.
+      - ./hermes/config.yaml:/etc/paperclip/hermes/config.yaml:ro
+    # Copy the Hermes config into place on every start (as `node`, after the
+    # entrypoint's ownership repair), then run the image's normal server command.
+    command:
+      - sh
+      - -c
+      - mkdir -p /paperclip/.hermes && cp /etc/paperclip/hermes/config.yaml /paperclip/.hermes/config.yaml && exec node server/dist-runtime/index.mjs
     # Reach services published on the host (Switchyard, vLLM) from the container.
     extra_hosts:
       - "host.docker.internal:host-gateway"

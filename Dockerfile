@@ -242,6 +242,21 @@ EXPOSE 3100
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "docker-entrypoint.sh"]
 CMD ["node", "server/dist-runtime/index.mjs"]
 
+# Hermes variant (build with `--target production-hermes`): the production
+# image plus the Hermes Agent CLI that the built-in `hermes_local` adapter
+# launches. Hermes is a Python package, so it gets its own virtual environment
+# under /opt/hermes, with only the `hermes` command linked onto PATH. Pin a
+# tested release; Hermes reads its provider from $HOME/.hermes/config.yaml.
+FROM production AS production-hermes
+ARG HERMES_AGENT_VERSION=0.19.0
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3-venv \
+  && rm -rf /var/lib/apt/lists/* \
+  && python3 -m venv /opt/hermes \
+  && /opt/hermes/bin/pip install --no-cache-dir "hermes-agent==${HERMES_AGENT_VERSION}" \
+  && ln -s /opt/hermes/bin/hermes /usr/local/bin/hermes \
+  && hermes --version
+
 # Cloud image variant (build with `--target cloud`): the production image
 # plus built bundled sandbox-provider plugins. Managed instances receive a
 # `plugins.autoInstall` key list through PAPERCLIP_MANAGED_CONFIG and

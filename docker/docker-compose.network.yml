@@ -1,0 +1,19 @@
+# Override for docker-compose.yml: puts Paperclip and PostgreSQL on an explicit,
+# named bridge network and keeps PostgreSQL off the host. The server reaches the
+# database by its service name (`db`) over this network.
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.network.yml up -d --build
+services:
+  db:
+    ports: !reset []
+    networks:
+      - paperclip-net
+
+  server:
+    networks:
+      - paperclip-net
+
+networks:
+  paperclip-net:
+    name: paperclip-net
+    driver: bridge

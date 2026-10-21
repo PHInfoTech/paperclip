@@ -82,6 +82,13 @@ local controller cache and authenticates the recorded running artifact, even
 when its own installed runner binary differs. It does not stage a new binary
 over the running process.
 
+The runner package owns checkpoint encoding, validation, restoration, and command
+classification. Its persistence callback exposes opaque records and explicit
+ownership metadata. The server owns encryption and transactional lease checks;
+heartbeat discovers eligible runs through the native runtime. Tool recovery uses
+the current tool authority, including receipt decoding and read policy. Transport
+adapters retain ownership of protocol response envelopes.
+
 Remote execution leases expire after 60 seconds and renew every 20 seconds.
 Graceful shutdown detaches and releases the lease. Startup and the existing
 orphan sweep claim eligible expired owners; another container's PID is not

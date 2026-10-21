@@ -152,7 +152,7 @@ it.each(["local", "custom local directory", "external launcher", "grok external 
     onSpawn: process => { spawned = process; },
     controlPlaneRegistration: async authority => {
       if (emptyController) {
-        authority.setCheckpointPersistence(async saved => { checkpoint = structuredClone(saved); });
+        authority.setCheckpointPersistence(async saved => { checkpoint = controlPlane.decodeDurablePrpCheckpoint(new Map(saved.records)); });
         await authority.flushCheckpoint();
       }
       await authority.start(controllerPort);
@@ -174,7 +174,7 @@ it.each(["local", "custom local directory", "external launcher", "grok external 
       catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
     };
     options.runnerProcessLauncher = spec => {
-      if (emptyController) expect(Object.keys(checkpoint!.state.tickets)).toHaveLength(1);
+      if (emptyController) expect(Object.keys(JSON.parse(checkpoint!.records.get("header")!).state.tickets)).toHaveLength(1);
       expect(spec.environment).not.toHaveProperty("OPENAI_API_KEY");
       expect(spec.args).toContain(runnerState);
       const child = spawn(spec.command, [...spec.args], { cwd: runnerState, env: spec.environment, stdio: "ignore" });
@@ -208,8 +208,7 @@ it.each(["local", "custom local directory", "external launcher", "grok external 
     await session.detachControllerForRestart!();
     if (emptyController) {
       await rm(options.stateDirectory, { recursive: true });
-      await mkdir(join(options.stateDirectory, "control-plane"), { recursive: true });
-      await writeFile(join(options.stateDirectory, "control-plane/control-plane-state.json"), JSON.stringify(checkpoint!.state), { mode: 0o600 });
+      checkpoint!.restoreSessionDirectory(options.stateDirectory);
     }
     const recoveredDriver = new RunnerdDotDriver({ ...options,
       ...(emptyController ? { runnerBinary: join(root, "unavailable-old-runner"),

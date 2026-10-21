@@ -1,3 +1,4 @@
+import { listExpiredNativeRunnerAuthorities } from "../native-runtime/native-runner-checkpoint.js";
 import { createHeartbeatAgentStatus } from "./agent-status.js";
 import { preserveWorkspaceRestoreRecoveryMetadataSql } from "../legacy-workspace-restore-recovery.js";
 import { preserveCancelledNativeWorkspaces } from "../native-runtime/native-failed-workspace-recovery.js";
@@ -38,7 +39,6 @@ import {
   heartbeatRuns,
   issues,
   nativeRunFinalizations,
-  nativeRunnerCheckpoints,
 } from "@paperclipai/db";
 import { logger } from "../../middleware/logger.js";
 import {
@@ -2150,18 +2150,7 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
       }
     }
 
-    const expiredRemoteAuthorities = await db.select({ runId: nativeRunFinalizations.runId })
-      .from(nativeRunFinalizations)
-      .innerJoin(nativeRunnerCheckpoints, and(
-        eq(nativeRunnerCheckpoints.runId, nativeRunFinalizations.runId),
-        eq(nativeRunnerCheckpoints.companyId, nativeRunFinalizations.companyId),
-        eq(nativeRunnerCheckpoints.part, "header")))
-      .innerJoin(heartbeatRuns, eq(heartbeatRuns.id, nativeRunFinalizations.runId))
-      .where(and(eq(heartbeatRuns.status, "running"),
-        eq(nativeRunFinalizations.phase, "observed"), isNull(nativeRunFinalizations.resultId),
-        or(isNull(nativeRunFinalizations.leaseExpiresAt), lte(nativeRunFinalizations.leaseExpiresAt, now))))
-      .limit(100);
-    const remoteRecoveryRunIds = expiredRemoteAuthorities.map(row => row.runId)
+    const remoteRecoveryRunIds = (await listExpiredNativeRunnerAuthorities(db, now))
       .filter(runId => !activeRunExecutions.has(runId) && !runningProcesses.has(runId));
     if (remoteRecoveryRunIds.length) {
       const recovery = await recoverNativeRunsAfterRestart(now, remoteRecoveryRunIds);

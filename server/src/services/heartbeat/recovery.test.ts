@@ -614,7 +614,7 @@ describePostgres("heartbeat recovery module ownership", () => {
       phase: "observed", recoveryState: "awaiting_runner_reattach", leaseOwner: "prior-server",
       leaseExpiresAt: new Date(Date.now() + 60_000) });
     await db.insert(nativeRunnerCheckpoints).values({ runId: run.id, companyId: run.companyId, issueId: run.issueId!,
-      part: "header", material: { fixture: true } });
+      part: "opaque-checkpoint-record", material: { fixture: true } });
     const recovery = createHeartbeatRecovery(db, deps);
     try {
       await recovery.reapOrphanedRuns();

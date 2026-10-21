@@ -27,6 +27,8 @@ import { validatePrpEvent } from "../protocol/replay-contract.js";
 import { digestPaperclipSemanticContent } from "../semantic-tools/receipts.js";
 import {
   DurablePrpControlPlane,
+  decodeDurablePrpCheckpoint,
+  type DurablePrpCheckpoint,
   durableRecoveryInternals,
   SemanticToolNotDispatchedError,
   inspectWarmRunTransition,
@@ -47,18 +49,74 @@ const identity: DurableRecoveryIdentity = {
 const expectedRunnerVersion = "0.3.0";
 const expectedRunnerDigest = `sha256:${"a".repeat(64)}`;
 
+it("restores authentication and commands from opaque checkpoint records", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "runner-checkpoint-codec-"));
+  const options = { stateDirectory: resolve(root, "control-plane"), identity, expectedRunnerVersion, expectedRunnerDigest };
+  const first = new DurablePrpControlPlane(options);
+  let checkpoint!: DurablePrpCheckpoint;
+  first.setCheckpointPersistence(async saved => { checkpoint = saved; });
+  let restored: DurablePrpControlPlane | undefined;
+  try {
+    const ticket = first.issueBootstrapTicket();
+    first.queueCommand("session.snapshot", {}, "maintenance");
+    first.queueCommand("turn.start", {}, "execution");
+    await first.flushCheckpoint();
+    expect(checkpoint.workCommandIds).toEqual(["execution"]);
+    await first.stop();
+    rmSync(options.stateDirectory, { recursive: true });
+    decodeDurablePrpCheckpoint(new Map(checkpoint.records)).restoreSessionDirectory(root);
+    restored = new DurablePrpControlPlane(options);
+    expect(restored.getCommand("execution")).toMatchObject({ type: "turn.start" });
+    await restored.start();
+    const client = (await authenticate(restored, ticket))!;
+    expect(client.welcome.kind).toBe("welcome");
+    client.socket.destroy();
+  } finally {
+    await restored?.stop();
+    await first.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it.each(["missing record", "invalid state", "wrong sequence"])("rejects %s at checkpoint decoding", async fault => {
+  const root = mkdtempSync(resolve(tmpdir(), "runner-checkpoint-invalid-"));
+  const core = new DurablePrpControlPlane({ stateDirectory: root, identity, expectedRunnerVersion, expectedRunnerDigest });
+  let checkpoint!: DurablePrpCheckpoint;
+  core.setCheckpointPersistence(async saved => { checkpoint = saved; });
+  try {
+    core.queueCommand("session.snapshot", {}, "saved-command");
+    await core.flushCheckpoint();
+    const records = new Map(checkpoint.records);
+    if (fault === "missing record") records.delete("command:1");
+    if (fault === "invalid state") {
+      const header = JSON.parse(records.get("header")!);
+      header.state.ackedSourceSeq = -1;
+      records.set("header", JSON.stringify(header));
+    }
+    if (fault === "wrong sequence") {
+      const command = JSON.parse(records.get("command:1")!);
+      command.controllerSeq = 2;
+      records.set("command:1", JSON.stringify(command));
+    }
+    expect(() => decodeDurablePrpCheckpoint(records)).toThrow(/native_runner_checkpoint_/);
+  } finally {
+    await core.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("persists authentication and commands before the runner can observe them", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "runner-external-journal-"));
   const core = new DurablePrpControlPlane({ stateDirectory: root, identity, expectedRunnerVersion, expectedRunnerDigest });
   let release!: () => void;
   let pending: Promise<void> = Promise.resolve();
-  const snapshots: unknown[] = [];
+  const snapshots: DurablePrpCheckpoint[] = [];
   core.setCheckpointPersistence(async snapshot => { await pending; snapshots.push(snapshot); });
   try {
     await core.start();
     const client = (await authenticate(core, core.issueBootstrapTicket()))!;
-    expect(snapshots.at(-1)).toMatchObject({ runnerVersion: expectedRunnerVersion,
-      state: { connectionCount: 1, lastLeaseId: client.welcome.connectionLeaseId } });
+    expect(snapshots.at(-1)).toMatchObject({ runnerVersion: expectedRunnerVersion, runId: identity.runId });
+    expect(snapshots.at(-1)!.records.get("header")).toContain(client.welcome.connectionLeaseId);
     pending = new Promise<void>(resolveCommit => { release = resolveCommit; });
     core.queueCommand("session.snapshot", {}, "checkpoint-command", true);
     let received = false;
@@ -67,7 +125,7 @@ it("persists authentication and commands before the runner can observe them", as
     expect(received).toBe(false);
     release();
     expect(await command).toMatchObject({ kind: "command", payload: { commandId: "checkpoint-command" } });
-    expect(snapshots.at(-1)).toMatchObject({ state: { commands: [expect.objectContaining({ commandId: "checkpoint-command" })] } });
+    expect([...snapshots.at(-1)!.records.values()].join("\n")).toContain("checkpoint-command");
     client.socket.destroy();
   } finally {
     release?.();
@@ -82,7 +140,7 @@ it("does not dispatch a semantic effect when external journal persistence fails"
   const core = new DurablePrpControlPlane({ stateDirectory: root, identity, expectedRunnerVersion,
     expectedRunnerDigest, onSemanticToolInput: dispatch });
   core.setCheckpointPersistence(async snapshot => {
-    if (snapshot.state.ackedSourceSeq > 0) throw new Error("database unavailable");
+    if (JSON.parse(snapshot.records.get("header")!).state.ackedSourceSeq > 0) throw new Error("database unavailable");
   });
   try {
     await core.start();

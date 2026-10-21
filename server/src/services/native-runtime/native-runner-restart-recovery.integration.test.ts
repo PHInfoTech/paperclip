@@ -56,7 +56,7 @@ import { waitForPendingRunFailureReports } from "../run-failure-report.js";
 import { closeIdleWarmNativeSessionsForRestart, detachNativeSessionsForRestart, executePaperclipNativeSession, NativeControllerDetachedForRestartError } from "./native-session-executor.js";
 import { loadNativeRunnerCheckpoint, registerNativeRunnerCheckpoint, restoreNativeRunnerCheckpoint } from "./native-runner-checkpoint.js";
 import { REMOTE_RUNNER_RECONNECT_GRACE_MS } from "./native-runner-recovery-contract.js";
-import { recoverNativeSemanticInput } from "./native-semantic-recovery.js";
+import { PaperclipRunnerToolAuthority } from "./paperclip-runner-tool-authority.js";
 
 const mockCaptureRunFailure = vi.hoisted(() => vi.fn());
 vi.mock("../../sentry.js", async () => {
@@ -654,32 +654,33 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
     const fixture = await seedRun("TOOL-RECOVERY");
     const binding = { companyId, issueId: fixture.issueId, agentId, runId: fixture.runId };
     const call = { callId: "tool-call", operationId: "write_document", input: { idempotencyKey: "write-1", body: "saved" } };
-    const executeRead = vi.fn(async () => ({ context: "current" }));
+    const authority = new PaperclipRunnerToolAuthority(fixture.db, { ...binding, apiToolsEnabled: true });
+    const executeRead = vi.spyOn(authority, "execute").mockResolvedValue({ context: "current" });
+    const recover = (call: { callId: string; operationId: string; input: unknown }) =>
+      authority.recover({ tool: call.operationId, callId: call.callId, arguments: call.input });
     await fixture.db.update(heartbeatRuns).set({ resultJson: { semanticToolReceipts: {
       "write-1": { operationId: call.operationId, input: call.input, result: { revision: "revision-1" } },
     } } }).where(eq(heartbeatRuns.id, fixture.runId));
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call, executeRead }))
+    await expect(recover(call))
       .resolves.toEqual({ result: { revision: "revision-1" } });
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: { ...call, input: { ...call.input, body: "changed" } }, executeRead }))
+    await expect(recover({ ...call, input: { ...call.input, body: "changed" } }))
       .resolves.toBeNull();
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: { ...call, operationId: "unknown_external_write" }, executeRead }))
+    await expect(recover({ ...call, operationId: "unknown_external_write" }))
       .resolves.toBeNull();
     expect(executeRead).not.toHaveBeenCalled();
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: { ...call, operationId: "get_task_context" }, executeRead }))
+    await expect(recover({ ...call, operationId: "get_task_context" }))
       .resolves.toEqual({ result: { context: "current" } });
     expect(executeRead).toHaveBeenCalledTimes(1);
     const apiRead = { callId: "api-read", operationId: "call_api", input: { operationId: "GET /api/agents/me" } };
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: apiRead, executeRead }))
+    await expect(recover(apiRead))
       .resolves.toEqual({ result: { context: "current" } });
     expect(executeRead).toHaveBeenCalledTimes(2);
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding,
-      call: { ...apiRead, input: { operationId: "POST /api/issues/{id}/comments" } }, executeRead })).resolves.toBeNull();
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding,
-      call: { ...apiRead, input: { operationId: "GET /unknown" } }, executeRead })).resolves.toBeNull();
+    await expect(recover({ ...apiRead, input: { operationId: "POST /api/issues/{id}/comments" } })).resolves.toBeNull();
+    await expect(recover({ ...apiRead, input: { operationId: "GET /unknown" } })).resolves.toBeNull();
     expect(executeRead).toHaveBeenCalledTimes(2);
     await fixture.db.update(heartbeatRuns).set({ status: "cancelled" }).where(eq(heartbeatRuns.id, fixture.runId));
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call, executeRead })).resolves.toBeNull();
-    await expect(recoverNativeSemanticInput({ db: fixture.db, binding, call: apiRead, executeRead })).resolves.toBeNull();
+    await expect(recover(call)).rejects.toThrow("paperclip_runner_tool_binding_not_authorized");
+    await expect(recover(apiRead)).rejects.toThrow("paperclip_runner_tool_binding_not_authorized");
     expect(executeRead).toHaveBeenCalledTimes(2);
   });
 
@@ -699,21 +700,24 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
     authority.queueCommand("session.snapshot", {}, "durable-command");
     await authority.flushCheckpoint();
     const saved = await loadNativeRunnerCheckpoint(fixture.db, binding);
-    expect(saved?.state).toEqual(authority.store.state);
+    expect(saved).toMatchObject({ runId: fixture.runId, runnerVersion: "old-version", predecessor: null });
     const raw = await fixture.db.select().from(nativeRunnerCheckpoints).where(eq(nativeRunnerCheckpoints.runId, fixture.runId));
-    expect(raw.map(row => row.part).sort()).toEqual(["command:1", "header"]);
+    expect(raw.map(row => row.part).sort()).toEqual([...saved!.records.keys()].sort());
     expect(JSON.stringify(raw)).not.toContain(token);
     expect(JSON.stringify(raw)).not.toContain("durable-command");
     await rm(root, { recursive: true, force: true });
-    expect(await restoreNativeRunnerCheckpoint(fixture.db, binding, root)).toEqual(saved);
-    expect(JSON.parse(await readFile(resolve(root, "control-plane/control-plane-state.json"), "utf8"))).toEqual(saved?.state);
+    expect((await restoreNativeRunnerCheckpoint(fixture.db, binding, root))?.records).toEqual(saved?.records);
+    const restored = new DurablePrpControlPlane({ stateDirectory: resolve(root, "control-plane"),
+      identity: options.prpIdentity, expectedRunnerVersion: saved!.runnerVersion, expectedRunnerDigest: saved!.runnerDigest });
+    expect(restored.getCommand("durable-command")).toMatchObject({ type: "session.snapshot" });
+    await restored.stop();
     expect(await loadNativeRunnerCheckpoint(fixture.db, { ...binding, companyId: randomUUID() })).toBeNull();
 
     await fixture.db.update(nativeRunFinalizations).set({ controllerBootId: randomUUID(), controllerGeneration: 2,
       leaseOwner: "successor-controller" }).where(eq(nativeRunFinalizations.runId, fixture.runId));
     authority.queueCommand("session.snapshot", {}, "stale-command");
     await expect(authority.flushCheckpoint()).rejects.toThrow("native_runner_checkpoint_owner_lost");
-    expect(await loadNativeRunnerCheckpoint(fixture.db, binding)).toEqual(saved);
+    expect((await loadNativeRunnerCheckpoint(fixture.db, binding))?.records).toEqual(saved?.records);
     await authority.stop();
   });
 

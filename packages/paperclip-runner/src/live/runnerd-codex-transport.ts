@@ -5873,7 +5873,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     if (call.operationId === "paperclip_finish" || call.operationId === "paperclip_block") {
       return this.#handleSemanticToolInput(call);
     }
-    return this.options.recoverSemanticToolInput?.(call) ?? null;
+    const outcome = await this.options.recoverSemanticToolInput?.(call);
+    return outcome ? this.#bindSemanticToolOutcome(call, outcome) : null;
   }
 
   async #handleSemanticToolInput(
@@ -5941,15 +5942,16 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       this.options.provider === "acpx" &&
         (call.operationId === "paperclip_finish" || call.operationId === "paperclip_block"),
     );
+    return this.#bindSemanticToolOutcome(call, outcome);
+  }
+
+  #bindSemanticToolOutcome(call: { operationId: string; callId: string }, outcome: { result: unknown; isError?: boolean }) {
     if (call.operationId === "call_api") {
       const result = record(outcome.result);
       if (
         result.operationId !== call.operationId ||
         result.callId !== call.callId
       ) {
-        // HTTP receipts also contain `ok` and `operationId` (the HTTP route).
-        // Bind that application value inside a real semantic envelope so the
-        // runner cannot mistake the route for the provider tool's identity.
         return {
           ...outcome,
           result: {

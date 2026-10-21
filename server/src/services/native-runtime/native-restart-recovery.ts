@@ -1,4 +1,5 @@
 import { notifyExecutionRunWork } from "../execution-control-notifications.js";
+import { hasNativeRunnerCheckpoint } from "./native-runner-checkpoint.js";
 import { readNativeWorkspaceSyncReference } from "./native-workspace-sync.js";
 import { activeNativeExecutionRunIds, NATIVE_PREPARATION_FENCING_VERSION } from "./native-active-runs.js";
 import {
@@ -15,7 +16,6 @@ import {
   heartbeatRuns,
   issues,
   nativeRunFinalizations,
-  nativeRunnerCheckpoints,
 } from "@paperclipai/db";
 import { REMOTE_CONTROLLER_LEASE_MS } from "./native-runner-recovery-contract.js";
 import { readProcessStartedAt } from "../hot-restart.js";
@@ -590,12 +590,9 @@ export async function claimNativeRestartRecoveries(input: {
       const profile = row.run.runnerProfileJson ?? {};
       const remoteWorkspace = readNativeWorkspaceSyncReference(profile.nativeWorkspaceSync);
       const remoteSandbox = profile.nativeWorkspaceSync != null;
-      const [durableAuthority] = remoteWorkspace ? await tx.select({ runId: nativeRunnerCheckpoints.runId })
-        .from(nativeRunnerCheckpoints).where(and(
-          eq(nativeRunnerCheckpoints.companyId, row.run.companyId),
-          eq(nativeRunnerCheckpoints.issueId, row.coordinator.issueId),
-          eq(nativeRunnerCheckpoints.runId, row.run.id),
-          eq(nativeRunnerCheckpoints.part, "header"))) : [];
+      const durableAuthority = remoteWorkspace && await hasNativeRunnerCheckpoint(tx, {
+        companyId: row.run.companyId, issueId: row.coordinator.issueId, runId: row.run.id,
+      });
       const takeover = await evaluateNativeControllerTakeover({
         owner: row.coordinator,
         now,

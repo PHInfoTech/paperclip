@@ -142,6 +142,15 @@ const NATIVE_REVIEW_READ_TOOLS = new Set([
   "get_task_context", "get_task_history", "list_documents", "read_document", "list_document_revisions",
 ]);
 
+const RECOVERABLE_READ_OPERATIONS = new Set([
+  "get_task_context", "get_task_history", "search_tasks", "list_documents", "read_document",
+  "list_document_revisions", "list_agents", "get_agent", "list_projects", "list_approvals",
+  "get_approval", "get_approval_context", "read_agent_instructions", "get_agent_instruction_history",
+]);
+const readOnlyApiMethod = (method: string) => ["GET", "HEAD", "OPTIONS"].includes(method);
+const toolCallKey = (callId: string) => createHash("sha256").update(callId).digest("hex");
+const toolInputDigest = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
+
 type NativeIssueDocument = NonNullable<Awaited<ReturnType<ReturnType<typeof documentService>["getIssueDocumentByKey"]>>>;
 type NativeDocumentContent = { id: string | null; documentId: string; body: string; changeSummary?: string | null };
 const UNKNOWN_DOCUMENT_REVISION_BODY = "[Document revision content omitted: historical source trust could not be established.]";
@@ -233,6 +242,11 @@ function canonicalJson(value: unknown): string {
     return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";
+}
+
+function apiToolResult(value: unknown) {
+  const { operationId, ...response } = record(value);
+  return { ...response, apiOperationId: operationId };
 }
 
 export class PaperclipRunnerToolAuthority {
@@ -327,6 +341,54 @@ export class PaperclipRunnerToolAuthority {
     return this.binding.museRuntime ? all.filter(definition => MUSE_NATIVE_OPERATIONS.has(String(definition.name))) : all;
   }
 
+  async recover(call: Parameters<PaperclipRunnerToolAuthority["execute"]>[0]): Promise<{ result: unknown; isError?: boolean } | null> {
+    await this.#assertToolScope(call.tool);
+    if (!this.binding.museRuntime) await this.binding.assertBridgeAuthority?.();
+    const { run } = await this.#boundContext();
+    if (RECOVERABLE_READ_OPERATIONS.has(call.tool)) return { result: await this.execute(call) };
+    const input = record(call.arguments);
+    const key = typeof input.idempotencyKey === "string" ? input.idempotencyKey : null;
+    const receipt = key ? record(record(run.resultJson?.semanticToolReceipts)[key]) : {};
+    if (receipt.operationId === call.tool && canonicalJson(receipt.input) === canonicalJson(call.arguments)
+      && Object.hasOwn(receipt, "result")) return { result: receipt.result };
+
+    const callKey = toolCallKey(call.callId);
+    if (call.tool === "call_api") {
+      if (!runnerApiToolsEnabled(this.binding.companyId, this.binding.apiToolsEnabled)) return null;
+      const operation = runnerApiCatalog().find(entry => entry.operationId === input.operationId);
+      if (operation?.transport === "rest" && readOnlyApiMethod(operation.method)) return { result: await this.execute(call) };
+      const api = record(record(run.resultJson?.apiToolReceipts)[callKey]);
+      if (api.state !== "completed" || api.digest !== toolInputDigest(call.arguments)) return null;
+      const result = await this.#apiReceiptResult(api);
+      if (result === undefined || record(result).outcome === "unknown") return null;
+      return { result: apiToolResult(result) };
+    }
+    if (call.tool === "workspace_write" || call.tool === "workspace_run") {
+      const bridge = record(record(run.resultJson?.bridgeToolReceipts)[callKey]);
+      if (bridge.state === "completed" && bridge.tool === call.tool
+        && bridge.digest === toolInputDigest({ tool: call.tool, arguments: call.arguments })
+        && Object.hasOwn(bridge, "result")) return { result: bridge.result };
+    }
+    return null;
+  }
+
+  async #apiReceiptResult(receipt: { encryptedResult?: unknown; result?: unknown }): Promise<unknown> {
+    if (!receipt.encryptedResult) return receipt.result;
+    const text = await getSecretProvider("local_encrypted").resolveVersion({ material: record(receipt.encryptedResult), externalRef: null });
+    return JSON.parse(text);
+  }
+
+  async #assertToolScope(tool: string): Promise<void> {
+    if (this.binding.museRuntime) {
+      await this.binding.assertBridgeAuthority?.();
+      if (!MUSE_NATIVE_OPERATIONS.has(tool)) throw forbidden("This operation is outside the Muse first-party runtime profile");
+    }
+    if (this.binding.firstPartyOnly && (EXTERNAL_WORKSPACE_OPERATIONS.has(tool) || tool.startsWith("workspace_"))) throw forbidden("Paperclip workspace access is unavailable to this Grok Bot session.");
+    if (this.binding.nativeReview && tool !== "resolve_review" && !NATIVE_REVIEW_READ_TOOLS.has(tool)) {
+      throw forbidden("This review run may only inspect the assigned task and resolve its review.");
+    }
+  }
+
   async execute(call: {
     tool: string;
     callId: string;
@@ -357,17 +419,8 @@ export class PaperclipRunnerToolAuthority {
         beforeAccept: async tx => { await this.#lockAuthorizedMutationContext(tx); },
       });
     }
-    if (this.binding.museRuntime) {
-      await this.binding.assertBridgeAuthority?.();
-      if (!MUSE_NATIVE_OPERATIONS.has(call.tool)) throw forbidden("This operation is outside the Muse first-party runtime profile");
-    }
-    if (this.binding.firstPartyOnly && (EXTERNAL_WORKSPACE_OPERATIONS.has(call.tool) || call.tool.startsWith("workspace_"))) throw forbidden("Paperclip workspace access is unavailable to this Grok Bot session.");
-    if (this.binding.nativeReview) {
-      if (call.tool === "resolve_review") return this.#resolveReview(call.arguments);
-      if (!NATIVE_REVIEW_READ_TOOLS.has(call.tool)) {
-        throw forbidden("This review run may only inspect the assigned task and resolve its review.");
-      }
-    }
+    await this.#assertToolScope(call.tool);
+    if (this.binding.nativeReview && call.tool === "resolve_review") return this.#resolveReview(call.arguments);
     if (Object.hasOwn(TASK_ATTACHMENT_SCHEMAS, call.tool)) {
       const authorize = async () => {
         const current = await this.#boundContext();
@@ -643,8 +696,7 @@ export class PaperclipRunnerToolAuthority {
         // PRP reserves operationId/callId for semantic result identity. The
         // HTTP operation is metadata, including in previously saved receipts;
         // exposing it as operationId makes the runner reject a valid response.
-        const { operationId, ...response } = record(await this.#callApi(call.callId, call.arguments));
-        return { ...response, apiOperationId: operationId };
+        return apiToolResult(await this.#callApi(call.callId, call.arguments));
       }
       case "get_task_context": {
         const monitorCheckAt = !this.binding.nativeReview && context.issue.workMode === "standard" &&
@@ -794,8 +846,8 @@ export class PaperclipRunnerToolAuthority {
 
   async #bridgeMutation(call: { tool: string; callId: string; arguments: unknown }, execute: () => Promise<unknown>) {
     if (!call.callId || call.callId.length > 500) throw badRequest("Use a stable bounded call ID");
-    const key = createHash("sha256").update(call.callId).digest("hex");
-    const digest = createHash("sha256").update(canonicalJson({ tool: call.tool, arguments: call.arguments })).digest("hex");
+    const key = toolCallKey(call.callId);
+    const digest = toolInputDigest({ tool: call.tool, arguments: call.arguments });
     const prior = await this.db.transaction(async tx => {
       const context = await this.#lockAuthorizedMutationContext(tx as unknown as Db);
       const resultJson = record(context.run.resultJson), receipts = record(resultJson.bridgeToolReceipts);
@@ -885,36 +937,27 @@ export class PaperclipRunnerToolAuthority {
       await this.#assertDotApiFileAccess(operation.path, input);
       return result;
     };
-    if (["GET", "HEAD", "OPTIONS"].includes(operation.method)) return execute();
+    if (readOnlyApiMethod(operation.method)) return execute();
     if (!callId || callId.length > 500) throw badRequest("A bounded runner call id is required");
     const provider = sensitiveResponse ? getSecretProvider("local_encrypted") : null;
     if (provider) await provider.createSecret({ value: "runner-api-receipt-key-check" });
     // Reserve durably before HTTP dispatch, without holding a DB lock over an
     // HTTP route that itself needs DB locks. A crash leaves an explicit unknown
     // outcome rather than replaying a possibly committed external mutation.
-    const key = createHash("sha256").update(callId).digest("hex");
-    const digest = createHash("sha256").update(canonicalJson(input)).digest("hex");
+    const key = toolCallKey(callId);
+    const digest = toolInputDigest(input);
     const prior = await this.db.transaction(async (tx) => {
       const locked = await this.#lockAuthorizedMutationContext(tx as unknown as Db);
       const resultJson = record(locked.run.resultJson);
       const receipts = record(resultJson.apiToolReceipts);
       const inherited = await priorRecoveryApiReceipt(tx as unknown as Db, { companyId: this.binding.companyId,
         issueId: this.binding.issueId, runId: this.binding.runId, operationId: operation.operationId, digest });
-      if (inherited) {
-        if (inherited.encryptedResult) {
-          const text = await getSecretProvider("local_encrypted").resolveVersion({ material: record(inherited.encryptedResult), externalRef: null });
-          return { result: JSON.parse(text) as unknown };
-        }
-        return { result: inherited.result };
-      }
+      if (inherited) return { result: await this.#apiReceiptResult(inherited) };
       const existing = record(receipts[key]);
       if (receipts[key]) {
         if (existing.digest !== digest) throw badRequest("API call id was reused with different arguments");
-        if (existing.encryptedResult) {
-          const text = await getSecretProvider("local_encrypted").resolveVersion({ material: record(existing.encryptedResult), externalRef: null });
-          return { result: JSON.parse(text) as unknown };
-        }
-        return { result: existing.result ?? { ok: false, status: null, error: "api_outcome_unknown", outcome: "unknown", guidance: "Inspect state before issuing another mutation." } };
+        const result = await this.#apiReceiptResult(existing);
+        return { result: existing.encryptedResult ? result : result ?? { ok: false, status: null, error: "api_outcome_unknown", outcome: "unknown", guidance: "Inspect state before issuing another mutation." } };
       }
       if (Object.keys(receipts).length >= 512) throw badRequest("Run API mutation limit reached");
       receipts[key] = { digest, operationId: operation.operationId, state: "pending" };

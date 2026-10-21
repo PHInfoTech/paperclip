@@ -77,7 +77,6 @@ import {
 import { tmpdir, userInfo } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { nativeRunnerCheckpointPersistence, restoreNativeRunnerCheckpoint } from "./native-runner-checkpoint.js";
-import { recoverNativeSemanticInput } from "./native-semantic-recovery.js";
 import { REMOTE_CONTROLLER_LEASE_MS, REMOTE_RUNNER_RECONNECT_GRACE_MS } from "./native-runner-recovery-contract.js";
 import { basename, dirname, join, posix, resolve } from "node:path";
 import type {
@@ -1682,6 +1681,13 @@ class SessionToolAuthorityEpoch {
   definitions() {
     this.#assertCurrent();
     return this.#authority.definitions();
+  }
+
+  async recover(call: Parameters<PaperclipRunnerToolAuthority["recover"]>[0]) {
+    this.#assertCurrent();
+    const result = await this.#authority.recover(call);
+    this.#assertCurrent();
+    return result;
   }
 
   async execute(call: Parameters<PaperclipRunnerToolAuthority["execute"]>[0]) {
@@ -11768,10 +11774,8 @@ async function createRunnerdBackendWithinSessionClaim(
         stateDirectory: root, runnerBinary: remoteDot?.runnerBinary ?? resolvePaperclipRunnerBinary(),
         runnerArtifact: input.controllerPersistence?.runnerArtifact,
         runnerReconnectGraceMs: remoteDot ? REMOTE_RUNNER_RECONNECT_GRACE_MS : undefined,
-        recoverSemanticToolInput: input.controllerPersistence ? (call: Parameters<typeof recoverNativeSemanticInput>[0]["call"]) => recoverNativeSemanticInput({
-          db: input.db, binding: input.execution.binding, call,
-          executeRead: () => authorityEpoch.execute({ tool: call.operationId, callId: call.callId, arguments: call.input }),
-        }) : undefined,
+        recoverSemanticToolInput: input.controllerPersistence ? (call: { operationId: string; callId: string; input: unknown }) =>
+          authorityEpoch.recover({ tool: call.operationId, callId: call.callId, arguments: call.input }) : undefined,
         ...(remoteDot ?? {}),
         identity: { runnerInstanceId: effectiveRunnerInstanceId, environmentLeaseId: effectiveEnvironmentLeaseId,
           runId: input.execution.binding.runId, normalizedSessionId: nativeSessionKey(input.execution),
@@ -13258,14 +13262,11 @@ async function createRunnerdBackendWithinSessionClaim(
         stateDirectory: root,
         runnerBinary: controllerRunnerBinary,
         runnerArtifact: input.controllerPersistence?.runnerArtifact,
-        recoverSemanticToolInput: input.controllerPersistence ? call => recoverNativeSemanticInput({
-          db: input.db, binding: { ...input.execution.binding, runId: call.correlation.runId }, call,
-          executeRead: async () => {
-            const current = sessionToolAuthorityEpochs.get(sessionScopeId);
-            if (!current || current.runId !== call.correlation.runId) throw new Error("native_tool_authority_epoch_revoked");
-            return current.execute({ tool: call.operationId, callId: call.callId, arguments: call.input });
-          },
-        }) : undefined,
+        recoverSemanticToolInput: input.controllerPersistence ? call => {
+          const current = sessionToolAuthorityEpochs.get(sessionScopeId);
+          if (!current || current.runId !== call.correlation.runId) throw new Error("native_tool_authority_epoch_revoked");
+          return current.recover({ tool: call.operationId, callId: call.callId, arguments: call.input });
+        } : undefined,
         codexCommand: remoteCodexBinary ?? undefined,
         sourceCodexHome: remoteTarget
           ? resolveSourceCodexHome(resolveNativeProviderEnvironment(input.execution.provider, runnerEnvironment))

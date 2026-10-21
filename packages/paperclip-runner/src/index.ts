@@ -38,6 +38,7 @@ export {
   inspectWarmRunTransition,
   type DurablePrpControlPlaneOptions,
   type DurablePrpCheckpoint,
+  decodeDurablePrpCheckpoint,
   type PrpWireConnection,
   type PrpWireAttachment,
   type TransportCloseReason,

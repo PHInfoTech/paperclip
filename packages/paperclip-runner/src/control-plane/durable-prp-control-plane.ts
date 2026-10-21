@@ -279,10 +279,91 @@ export interface DurablePrpControlPlaneOptions {
 }
 
 export interface DurablePrpCheckpoint {
+  readonly runnerVersion: string;
+  readonly runnerDigest: string;
+  readonly runId: string;
+  readonly predecessor: { readonly runId: string; readonly normalizedSessionId: string } | null;
+  readonly records: ReadonlyMap<string, string>;
+  readonly workCommandIds: readonly string[];
+  restoreSessionDirectory(root: string): void;
+}
+
+type CheckpointHeader = {
   schema: "paperclip.runner.controller-checkpoint.v1";
   runnerVersion: string;
   runnerDigest: string;
-  state: StoredCoreState;
+  state: Omit<StoredCoreState, "commands" | "committedEvents">;
+  commands: string[];
+  events: string[];
+};
+
+function checkpointRunId(state: StoredCoreState): string {
+  if (state.warmTransition) return state.warmTransition.receipt.newIdentity.runId;
+  const attachment = state.commands.findLast(command => command.type === "run.attach");
+  const next = attachment?.payload.paperclipNextAuthority as { identity?: { runId?: string } } | undefined;
+  return next?.identity?.runId ?? state.identity.runId;
+}
+
+function captureCheckpoint(state: StoredCoreState, runnerVersion: string, runnerDigest: string): DurablePrpCheckpoint {
+  const { commands, committedEvents, ...metadata } = state;
+  const records = new Map<string, string>();
+  const commandKeys = commands.map(command => {
+    const key = `command:${command.controllerSeq}`;
+    records.set(key, JSON.stringify(command));
+    return key;
+  });
+  const eventKeys = committedEvents.map(event => {
+    const key = `event:${event.sourceSeq}`;
+    records.set(key, JSON.stringify(event));
+    return key;
+  });
+  const header: CheckpointHeader = { schema: "paperclip.runner.controller-checkpoint.v1",
+    runnerVersion, runnerDigest, state: metadata, commands: commandKeys, events: eventKeys };
+  records.set("header", JSON.stringify(header));
+  const runId = checkpointRunId(state);
+  const maintenance = new Set(["runner.drain", "runner.suspend", "session.snapshot", "session.close"]);
+  return {
+    runnerVersion, runnerDigest, runId, records,
+    predecessor: state.identity.runId === runId ? null
+      : { runId: state.identity.runId, normalizedSessionId: state.identity.normalizedSessionId },
+    workCommandIds: commands.filter(command => !maintenance.has(command.type)).map(command => command.commandId),
+    restoreSessionDirectory(root) {
+      mkdirSync(root, { recursive: true, mode: 0o700 });
+      verifyPrivateDirectory(root);
+      const directory = resolve(root, "control-plane");
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      verifyPrivateDirectory(directory);
+      atomicPrivateWrite(resolve(directory, "control-plane-state.json"), JSON.stringify(state));
+    },
+  };
+}
+
+export function decodeDurablePrpCheckpoint(records: ReadonlyMap<string, string>): DurablePrpCheckpoint {
+  const header: unknown = JSON.parse(records.get("header") ?? "null");
+  if (!isRecord(header) || header.schema !== "paperclip.runner.controller-checkpoint.v1"
+    || typeof header.runnerVersion !== "string" || !header.runnerVersion
+    || typeof header.runnerDigest !== "string" || !runnerDigestPattern.test(header.runnerDigest)
+    || !isRecord(header.state) || !exactIdentity(header.state.identity)
+    || !Array.isArray(header.commands) || header.commands.length > maxCommands
+    || !Array.isArray(header.events) || header.events.length > maxCommittedEventWindow
+    || header.commands.some(key => typeof key !== "string" || !/^command:\d+$/.test(key))
+    || header.events.some(key => typeof key !== "string" || !/^event:\d+$/.test(key))
+    || new Set(header.commands).size !== header.commands.length
+    || new Set(header.events).size !== header.events.length) throw new Error("native_runner_checkpoint_invalid");
+  const read = (key: string): unknown => {
+    const value = records.get(key);
+    if (value === undefined) throw new Error("native_runner_checkpoint_incomplete");
+    return JSON.parse(value);
+  };
+  const commandKeys = header.commands;
+  const eventKeys = header.events;
+  const state = { ...header.state, commands: commandKeys.map(read), committedEvents: eventKeys.map(read) };
+  if (!isStoredCoreState(state, header.state.identity)) throw new Error("native_runner_checkpoint_invalid");
+  if (state.commands.some((command, index) => commandKeys[index] !== `command:${command.controllerSeq}`)
+    || state.committedEvents.some((event, index) => eventKeys[index] !== `event:${event.sourceSeq}`)) {
+    throw new Error("native_runner_checkpoint_invalid");
+  }
+  return captureCheckpoint(state, header.runnerVersion, header.runnerDigest);
 }
 
 export interface RunnerProcessResult {
@@ -1593,12 +1674,8 @@ export class DurablePrpControlPlane {
     if (!this.#persistCheckpoint || this.#persistedRevision === this.#store.revision) {
       return this.#persistenceTail;
     }
-    const checkpoint: DurablePrpCheckpoint = {
-      schema: "paperclip.runner.controller-checkpoint.v1",
-      runnerVersion: this.#expectedRunnerVersion,
-      runnerDigest: this.#expectedRunnerDigest,
-      state: structuredClone(this.#store.state),
-    };
+    const checkpoint = captureCheckpoint(structuredClone(this.#store.state),
+      this.#expectedRunnerVersion, this.#expectedRunnerDigest);
     this.#persistedRevision = this.#store.revision;
     const persist = this.#persistCheckpoint;
     this.#persistenceTail = this.#persistenceTail.then(() => persist(checkpoint));

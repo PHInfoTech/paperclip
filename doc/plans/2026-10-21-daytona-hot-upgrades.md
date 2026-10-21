@@ -71,6 +71,25 @@ provider `turn/start` distinguishes adoption from interruption-and-resume.
 
 ## State
 
+Boundary revision requested after review of `1122b3f887`: keep checkpoint
+encoding, validation, command classification, and filesystem restoration in the
+runner package. The server persistence adapter receives opaque records plus run,
+predecessor, artifact, and execution-command metadata; it retains encryption and
+transactional lease enforcement. Tool receipt recovery moves behind the existing
+tool authority and its revocable session epoch. Heartbeat asks native runtime for
+expired recoverable runs without interpreting checkpoint storage markers.
+
+These extend the existing persistence callback and tool authority rather than
+introducing another provider abstraction. Local runners without a persistence
+callback retain their existing path. Verify opaque checkpoint round-trips and
+malformed persistence, receipt recovery under current authority, expired-owner
+discovery, external drivers, and actual empty-controller process recovery.
+
+Prior head CI/typecheck/build passed and its completed review was 5/5. Both hosted
+Daytona campaigns (39613279281 and 39616972414) stopped before sandbox launch
+because the trusted image builder exhausted disk. That live acceptance gap
+remains; this boundary revision does not change fleet settings or image workflows.
+
 Implementation is in draft PR https://github.com/paperclipai/paperclip/pull/17097.
 No production deployment has been performed.
 
@@ -119,19 +138,33 @@ controller-local artifact paths and incomplete remote workspace metadata;
 while retaining v53 decoding compatibility. CI found two peer mocks missing the
 new persistence methods; the corrected permission suites passed 27 tests.
 
-The first hosted Daytona attempt
-https://github.com/paperclipai/paperclip/actions/runs/39613279281
-failed before sandbox launch: the image publisher exhausted its disk while
-compressing the image. It did not exercise the restart scenario. One fresh
-attempt will target the updated branch.
+Boundary revision verification:
+- 147 protocol and external-driver tests passed, including opaque checkpoint
+  restoration and rejection of missing, malformed, and misidentified records.
+- 45 real-HTTP tool tests passed. The new recovery assertion exposed a pre-existing
+  receipt representation mismatch (`operationId` versus `apiOperationId`). The
+  tool authority now shares application-response conversion with live dispatch;
+  the transport owns semantic-envelope construction for both paths. Encrypted
+  receipts, disabled API access, and paused-agent rejection passed. The initial
+  failure is retained in `/tmp/daytona-boundary-api.log`.
+- 61 heartbeat and ownership regressions passed; 91 permission/Copilot tests passed.
+- The real 300-second outage passed in 321.93 seconds with the same runner/provider
+  and no old controller storage (`/tmp/daytona-boundary-five-minute.log`).
+- Same-server stale-cache recovery passed three turns and idle suspension in
+  disposable Linux (`/tmp/daytona-boundary-warm.log`, 28.13 seconds).
+- Workspace typecheck and build passed. Initial sandbox-only socket tests and pnpm
+  bootstrap were denied local sockets/network; the same commands passed with the
+  needed permissions. The transport parity test initially compared a private
+  callback marker; its public result/error assertions now pass.
 
-Next gates: finish the full repository suite, same-server recovery regression,
-current-head CI/review, and one exact Daytona Product E2E cell via the existing
-trusted hosted workflow. Local provider/Daytona
-credentials are absent; hosted qualification is available. Required repository
-checks and PR review remain. The hosted restart case now discards the old
-controller runtime cache before starting the replacement and requires an
-acknowledgement of that fault.
+Current-head CI and review must run after the boundary commit. Full hosted Daytona
+acceptance remains blocked by image-builder disk exhaustion in both campaigns:
+https://github.com/paperclipai/paperclip/actions/runs/39613279281 and
+https://github.com/paperclipai/paperclip/actions/runs/39616972414.
+Neither launched a sandbox. After supplying sufficient disk in the trusted image
+builder, rerun only `everyday-workflows.runner-codex.daytona.recover-controller`.
+Keep its empty-controller-cache fault and acknowledgement enabled. No third
+unchanged campaign, shared fleet change, or production deployment was attempted.
 
 Operational prerequisites: retain the same Postgres database and instance secret
 master key across replacement. A first rollout cannot extend the reconnect grace

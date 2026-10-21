@@ -50,6 +50,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { toolAccessService } from "../services/tool-access.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import * as instanceSettingsModule from "../services/instance-settings.js";
 import { connectionIntentService } from "../services/connection-intents.js";
 import { ComposioApiError, type ComposioClient } from "../services/composio.js";
 import { createComposioSessionManager } from "../services/composio-session-manager.js";
@@ -92,6 +93,7 @@ const FIXTURE_TOOLS = [
 
 type FixtureOptions = {
   notebookAccount?: { id: string; email: string; emailVerified: boolean };
+  contextResults?: Record<string, unknown>;
   scopes?: string[];
   rotateRefreshTokens?: boolean;
   dropFirstRefreshResponse?: boolean;
@@ -229,6 +231,9 @@ function installMcpOAuthFixture(options: FixtureOptions = {}) {
       if (options.notebookAccount && rpc.method === "notifications/initialized") return jsonResponse({}, 202);
       if (options.notebookAccount && rpc.method === "tools/call" && (rpc.params as Record<string, unknown>)?.name === "notebook_get_account") {
         return jsonResponse({ jsonrpc: "2.0", id: rpc.id, result: { structuredContent: options.notebookAccount, content: [] } });
+      }
+      if (typeof rpc.method === "string" && options.contextResults && Object.hasOwn(options.contextResults, rpc.method)) {
+        return jsonResponse({ jsonrpc: "2.0", id: rpc.id, result: options.contextResults[rpc.method] });
       }
       if (rpc.method === "tools/call") {
         return jsonResponse({ jsonrpc: "2.0", id: rpc.id, result: {
@@ -453,6 +458,85 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
     method.defaults!.serverUrl = MCP_URL;
     restoreCatalogEndpoints.push(() => { method.defaults!.serverUrl = originalUrl; });
   }
+
+  async function notebookContextFixture() {
+    const settings = instanceSettingsService(db);
+    await settings.updateExperimental({ enablePaperclipNotebook: true });
+    useNotebookFixtureEndpoint();
+    const fixture = installMcpOAuthFixture({ auth: "oauth", notebookAccount: { id: "cloud-owner", email: "owner@example.test", emailVerified: true },
+      tools: [{ name: "notebook_get_account", annotations: { readOnlyHint: true } }],
+      contextResults: {
+        "resources/list": { resources: [{ uri: "notes://one", name: "Note one" }] },
+        "resources/read": { contents: [{ uri: "notes://one", text: "resource body" }] },
+        "prompts/list": { prompts: [{ name: "summarize", title: "Summarize note" }] },
+        "prompts/get": { messages: [{ role: "user", content: { type: "text", text: "Summarize it" } }] },
+      } });
+    const company = await createCompany(db), service = toolAccessService(db, { paperclipCloudConnector: null });
+    const actor = { actorType: "user" as const, actorId: "board-user" };
+    const connected = await service.connectGalleryApp(company.id, { galleryKey: "paperclip-notebook" }, actor);
+    const start = await service.startOAuth(company.id, connected.connectionId, { redirectUri: REDIRECT_URI, actor });
+    const completed = await service.completeOAuthCallback({ state: new URL(start.authorizationUrl).searchParams.get("state")!,
+      code: fixture.issueAuthorizationCode(start.authorizationUrl), iss: ISSUER, redirectUri: REDIRECT_URI, actor });
+    const [agent] = await db.insert(agents).values({ companyId: company.id, name: "Context reader", role: "engineer", status: "active", adapterType: "process", adapterConfig: {}, runtimeConfig: {} }).returning();
+    const [issue] = await db.insert(issues).values({ companyId: company.id, title: "Read Notebook context", status: "in_progress", assigneeAgentId: agent!.id }).returning();
+    const [run] = await db.insert(heartbeatRuns).values({ companyId: company.id, agentId: agent!.id, invocationSource: "assignment", status: "running", responsibleUserId: "board-user", contextSnapshot: { issueId: issue!.id } }).returning();
+    await service.finishGalleryAppConnection(company.id, connected.connectionId, { enabledCatalogEntryIds: completed.catalog.map(entry => entry.id), askFirstCatalogEntryIds: [], access: { agentIds: [agent!.id] } }, actor);
+    const [profile] = await db.select().from(toolProfiles).where(eq(toolProfiles.profileKey, `app:${connected.connectionId}`));
+    await db.insert(toolProfileEntries).values({ companyId: company.id, profileId: profile!.id, selectorType: "connection", effect: "include", connectionId: connected.connectionId });
+    const gateway = createToolGatewayService(db);
+    const named = await gateway.createNamedGateway({ companyId: company.id, body: { name: "Notebook context", profileId: profile!.id, agentId: agent!.id, issueId: issue!.id } });
+    const token = await gateway.createNamedGatewayToken({ companyId: company.id, gatewayId: named.id, body: { name: "Context run", subjectType: "heartbeat_run", subjectId: run!.id } });
+    const context = (method: "resources/list" | "resources/read" | "prompts/list" | "prompts/get", params?: Record<string, unknown>) =>
+      gateway.executeContextForNamedGateway({ gatewayPublicId: named.gatewayPublicId, bearerToken: token.token, method, params });
+    const resources = await context("resources/list"), prompts = await context("prompts/list");
+    const uri = (resources.resources as { uri: string }[])[0]!.uri, name = (prompts.prompts as { name: string }[])[0]!.name;
+    expect(await context("resources/read", { uri })).toMatchObject({ contents: [{ uri, text: "resource body" }] });
+    expect(await context("prompts/get", { name })).toMatchObject({ messages: [{ role: "user" }] });
+    const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.connectionId, connected.connectionId));
+    await db.update(connectionGrants).set({ providerTenant: { ...grant!.providerTenant, oauth: {
+      ...grant!.providerTenant?.oauth, accessTokenExpiresAt: new Date(0).toISOString(),
+    } } }).where(eq(connectionGrants.id, grant!.id));
+    return { settings, fixture, service, connected, context, uri, name };
+  }
+
+  it.each(["missing", "relabelled"])("omits disabled Notebook resources and prompts and denies retained handles with %s markers", async marker => {
+    const f = await notebookContextFixture(), saved = await f.service.getConnection(f.connected.connectionId);
+    const config = { ...saved.config };
+    if (marker === "missing") delete config.sourceTemplateKey;
+    else config.sourceTemplateKey = "fireflies";
+    await f.service.updateConnection(f.connected.connectionId, { config });
+    await f.settings.updateExperimental({ enablePaperclipNotebook: false });
+    const calls = f.fixture.requests.length, secretAccess = await db.select().from(secretAccessEvents);
+    await expect(f.context("resources/list")).resolves.toEqual({ resources: [] });
+    await expect(f.context("prompts/list")).resolves.toEqual({ prompts: [] });
+    await expect(f.context("resources/read", { uri: f.uri })).rejects.toMatchObject({ reasonCode: "mcp_resource_not_found" });
+    await expect(f.context("prompts/get", { name: f.name })).rejects.toMatchObject({ reasonCode: "mcp_prompt_not_found" });
+    expect(f.fixture.requests).toHaveLength(calls);
+    expect(await db.select().from(secretAccessEvents)).toEqual(secretAccess);
+    await db.update(toolApplications).set({ applicationKey: "fireflies" }).where(eq(toolApplications.id, f.connected.application.id));
+    await expect(f.context("resources/list")).resolves.toMatchObject({ resources: [{ uri: f.uri }] });
+    await expect(f.context("prompts/list")).resolves.toMatchObject({ prompts: [{ name: f.name }] });
+    await expect(f.context("resources/read", { uri: f.uri })).resolves.toMatchObject({ contents: [{ uri: f.uri }] });
+    await expect(f.context("prompts/get", { name: f.name })).resolves.toMatchObject({ messages: [{ role: "user" }] });
+  });
+
+  it.each(["resources/read", "prompts/get"] as const)("rechecks saved availability before credentials when %s eligibility becomes stale", async method => {
+    const f = await notebookContextFixture(), actualService = instanceSettingsModule.instanceSettingsService;
+    let settingsReads = 0;
+    vi.spyOn(instanceSettingsModule, "instanceSettingsService").mockImplementation((...args) => {
+      const service = actualService(...args);
+      return { ...service, async getExperimental() {
+        const settings = await service.getExperimental();
+        if (++settingsReads === 1) await f.settings.updateExperimental({ enablePaperclipNotebook: false });
+        return settings;
+      } };
+    });
+    const calls = f.fixture.requests.length, secretAccess = await db.select().from(secretAccessEvents);
+    await expect(f.context(method, method === "resources/read" ? { uri: f.uri } : { name: f.name })).rejects.toMatchObject({ reasonCode: "connector_unavailable" });
+    expect(settingsReads).toBe(2);
+    expect(f.fixture.requests).toHaveLength(calls);
+    expect(await db.select().from(secretAccessEvents)).toEqual(secretAccess);
+  });
 
   it.each(["missing", "relabelled"])("keeps Notebook setup internal after %s markers, denying pending OAuth and finalization while allowing removal", async marker => {
     const company = await createCompany(db), settings = instanceSettingsService(db);

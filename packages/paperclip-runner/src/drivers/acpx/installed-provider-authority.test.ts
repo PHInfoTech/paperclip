@@ -27,6 +27,25 @@ describe("installed provider authority", () => {
     expect(resolveInstalledProviderAuthority(pathToFileURL(join(f.root, "dist/drivers/acpx/installation-integrity.js")).href)).toBeUndefined();
   });
 
+  it("adopts the pnpm workspace root for a source or Docker server build", async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), "installed-acpx-workspace-")));
+    roots.push(workspace);
+    const server = join(workspace, "server");
+    const directory = join(server, "dist/vendor/paperclip-runner/drivers/acpx");
+    await mkdir(directory, { recursive: true });
+    await mkdir(join(workspace, "node_modules/.pnpm"), { recursive: true });
+    await writeFile(join(directory, "installation-integrity.js"), "export {};\n");
+    await writeFile(join(server, "package.json"), JSON.stringify({ name: "@paperclipai/server" }));
+    await writeFile(join(workspace, "package.json"), JSON.stringify({ name: "paperclip", private: true }));
+    await writeFile(join(workspace, "pnpm-workspace.yaml"), "packages: []\n");
+    const module = pathToFileURL(join(directory, "installation-integrity.js")).href;
+    expect(resolveInstalledProviderAuthority(module)).toEqual({ root: workspace, manifest: join(server, "package.json") });
+
+    // A server with its own virtual store keeps its own authority.
+    await mkdir(join(server, "node_modules/.pnpm"), { recursive: true });
+    expect(resolveInstalledProviderAuthority(module)).toEqual({ root: server, manifest: join(server, "package.json") });
+  });
+
   it("rejects a substituted package owner", async () => {
     const f = await fixture("unrelated-package");
     expect(() => resolveInstalledProviderAuthority(pathToFileURL(f.module).href)).toThrow("owning server package");

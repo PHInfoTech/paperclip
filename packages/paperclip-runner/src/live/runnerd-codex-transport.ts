@@ -16,6 +16,7 @@ import { isAcpxCanonicalInputMethod } from "../drivers/acpx/profile-extensions.j
 import { RunnerdTraceFrameIndex } from "./runnerd-trace-frame-index.js";
 import { waitForWarmAttachmentReadiness } from "./warm-attachment-readiness.js";
 import { resolveCodexCommand } from "../drivers/codex/codex-command.js";
+import { sourceWorkspaceProviderRoot } from "../drivers/acpx/installed-provider-authority.js";
 import { isCanonicalProviderEventType } from "../provider-events.js";
 import { execFileSync } from "node:child_process";
 import { readLinuxProcessStartedAt } from "./linux-process-start.js";
@@ -3019,21 +3020,7 @@ function acpxProviderPackageAuthority(
       basename(resolve(cliDirectory, "../..")) === "vendor" &&
       basename(resolve(cliDirectory, "../../..")) === "dist") {
     const serverRoot = resolve(cliDirectory, "../../../..");
-    const workspaceRoot = dirname(serverRoot);
-    // Source/Docker builds share the workspace's pnpm store. Published npm
-    // bundles and self-rooted pnpm deployments retain their server authority.
-    if (basename(serverRoot) === "server" &&
-        !existsSync(resolve(serverRoot, "node_modules/.pnpm")) &&
-        existsSync(resolve(workspaceRoot, "node_modules/.pnpm")) &&
-        existsSync(resolve(workspaceRoot, "pnpm-workspace.yaml")) &&
-        existsSync(resolve(workspaceRoot, "package.json"))) {
-      const workspace = JSON.parse(readFileSync(resolve(workspaceRoot, "package.json"), "utf8"));
-      const server = JSON.parse(readFileSync(resolve(serverRoot, "package.json"), "utf8"));
-      if (workspace.name === "paperclip" && workspace.private === true && server.name === "@paperclipai/server") {
-        return { root: workspaceRoot, manifest: resolve(serverRoot, "package.json") };
-      }
-    }
-    return { root: serverRoot, manifest: resolve(serverRoot, "package.json") };
+    return { root: sourceWorkspaceProviderRoot(serverRoot) ?? serverRoot, manifest: resolve(serverRoot, "package.json") };
   }
   if (
     basename(sidecarScript) !== "acpx-runtime-sidecar.cjs" ||

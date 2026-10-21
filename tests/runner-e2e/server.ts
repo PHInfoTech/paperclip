@@ -321,8 +321,6 @@ async function restartServer({ requestId, preserveRunner, discardControllerCache
   // must stop answering before the next launcher is allowed to start.
   await waitForHealthToStop();
   if (discardControllerCache) {
-    // Keep the old cache in private evidence, outside all product lookup paths.
-    // Retain the database and instance encryption key as a deployment would.
     const cache = path.join(paperclipHome, "instances", required("PAPERCLIP_INSTANCE_ID"), "runtime", "paperclip-runner");
     await rename(cache, path.join(controlDirectory, `retired-controller-cache-${requestId}`));
     appendLog(`Restart request ${requestId}: old controller cache made unavailable\n`);

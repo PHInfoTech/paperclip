@@ -742,8 +742,6 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
       await new Promise(resolveOutage => setTimeout(resolveOutage, outageMs));
       expect(processAlive(runnerPid)).toBe(true);
       expect(processAlive(providerPid)).toBe(true);
-      // A graceful release or an expired crash lease can be claimed even when
-      // the old PID happens to exist in the successor's process namespace.
       await fixture.db.update(nativeRunFinalizations).set({ leaseExpiresAt: new Date(Date.now() - 1) })
         .where(eq(nativeRunFinalizations.runId, fixture.runId));
       bootId = randomUUID();
@@ -754,7 +752,6 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
       if (!checkpoint) throw new Error("Missing durable authority");
       const duplicateLauncher = vi.fn(() => { throw new Error("duplicate runner spawn attempted"); });
       adopted = createRunnerdCodexTransport({ ...options,
-        // A new server need not retain the executable used by the running turn.
         runnerBinary: resolve(controllerRoot, "new-release-does-not-contain-old-runner"),
         runnerArtifact: { version: checkpoint.runnerVersion, digest: checkpoint.runnerDigest },
         resumeDynamicTools: [], runnerProcessLauncher: duplicateLauncher,

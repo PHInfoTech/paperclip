@@ -7,8 +7,6 @@ import { localEncryptedProvider } from "../../secrets/local-encrypted-provider.j
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const digest = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
-// Re-execution of these reads still goes through the current tool authority.
-// Unknown operations and external effects require a completed durable receipt.
 const recoverableReads = new Set([
   "get_task_context", "get_task_history", "search_tasks", "list_documents", "read_document",
   "list_document_revisions", "list_agents", "get_agent", "list_projects", "list_approvals",

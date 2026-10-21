@@ -1,4 +1,2 @@
-/** Remote execution survives a five-minute control-plane outage. The extra
- * interval allows controller ownership expiry and authenticated reconnection. */
 export const REMOTE_RUNNER_RECONNECT_GRACE_MS = 7 * 60_000;
 export const REMOTE_CONTROLLER_LEASE_MS = 60_000;

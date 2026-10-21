@@ -12052,8 +12052,6 @@ async function createRunnerdBackendWithinSessionClaim(
       return;
     selectedRemoteMode = requiredMode;
     if (input.restartRecovery?.kind === "reattach_remote_runner" || input.remoteWarmRecovery) {
-      // The authenticated existing process, not the newly installed artifact,
-      // owns this turn. It must not be restaged during a server upgrade.
       if (input.controllerPersistence?.runnerArtifact) {
         remotePrepared = true;
         return;

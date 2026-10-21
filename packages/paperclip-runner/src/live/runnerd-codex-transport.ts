@@ -3989,9 +3989,6 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   setServerRequestHandler(handler: CodexServerRequestHandler): void {
     this.#handler = handler;
     if (this.options.recoverSemanticToolInput && this.#startupComplete) {
-      // The harness installs its request handler only after it restores the
-      // active turn. Reconcile receipts after that admission, never during
-      // thread/read while the provider facade still has provisional identity.
       void Promise.resolve().then(() => this.#core?.recoverPendingSemanticInputs())
         .catch(error => this.#failTransport(error instanceof Error ? error : new Error(String(error))));
     }
@@ -5873,9 +5870,6 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   }
 
   async #recoverSemanticToolInput(call: Parameters<NonNullable<DurablePrpControlPlaneOptions["onSemanticToolInput"]>>[0]) {
-    // Completion declarations are admitted idempotently by the restored
-    // harness. They do not redispatch a tool mutation; its exact prior result
-    // still has to pass the normal completion and workspace finalization gates.
     if (call.operationId === "paperclip_finish" || call.operationId === "paperclip_block") {
       return this.#handleSemanticToolInput(call);
     }

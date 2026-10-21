@@ -40,7 +40,6 @@ function checkpointParts(checkpoint: DurablePrpCheckpoint): Map<string, string> 
   return parts;
 }
 
-/** The encrypted envelope binds ciphertext to its row, even if rows are copied. */
 async function encryptPart(binding: Binding, part: string, contents: string) {
   return (await localEncryptedProvider.createVersion({ value: JSON.stringify({ ...binding, part, contents }) })).material;
 }
@@ -54,7 +53,6 @@ async function decryptPart(binding: Binding, part: string, material: Record<stri
   return envelope.contents;
 }
 
-/** Only changed journal entries are written; a new event never rewrites the event history. */
 export function nativeRunnerCheckpointWriter(db: Db, owner: Owner) {
   let previous = new Map<string, string>();
   return async (checkpoint: DurablePrpCheckpoint): Promise<void> => {
@@ -64,8 +62,6 @@ export function nativeRunnerCheckpointWriter(db: Db, owner: Owner) {
       .map(async ([part, value]) => ({ companyId: owner.companyId, issueId: owner.issueId,
         runId: owner.runId, part, material: await encryptPart(owner, part, value) })));
     await db.transaction(async tx => {
-      // Same lock and generation as controller recovery. A stale writer cannot
-      // publish credentials or commands after the successor has claimed the run.
       const [owned] = await tx.select({ current: nativeRunFinalizations, now: sql<Date>`clock_timestamp()` }).from(nativeRunFinalizations)
         .where(and(eq(nativeRunFinalizations.companyId, owner.companyId),
           eq(nativeRunFinalizations.issueId, owner.issueId), eq(nativeRunFinalizations.runId, owner.authorityRunId),
@@ -76,9 +72,6 @@ export function nativeRunnerCheckpointWriter(db: Db, owner: Owner) {
       const activeOwner = current.leaseOwner === owner.leaseOwner
         && current.leaseExpiresAt !== null && current.leaseExpiresAt > new Date(owned.now);
       if (!activeOwner) {
-        // A completed warm session retains transport maintenance until it is
-        // reused or retired. Its released execution lease cannot authorize a
-        // new turn or attachment. The next run's writer owns that boundary.
         const maintenance = new Set(["runner.drain", "runner.suspend", "session.snapshot", "session.close"]);
         const newWork = checkpoint.state.commands.some(command =>
           !previous.has(`command:${command.controllerSeq}`) && !maintenance.has(command.type));
@@ -89,8 +82,6 @@ export function nativeRunnerCheckpointWriter(db: Db, owner: Owner) {
               eq(nativeRunFinalizations.runId, task.executionRunId), eq(nativeRunFinalizations.companyId, owner.companyId),
               eq(nativeRunFinalizations.issueId, owner.issueId), eq(nativeRunFinalizations.controllerBootId, owner.bootId),
               gt(nativeRunFinalizations.leaseExpiresAt, sql`clock_timestamp()`))) : [];
-        // The same controller snapshots the old session before attaching the
-        // next run. A successor on another server must first take ownership.
         if (!current.resultId || newWork || !task || (task.executionRunId && task.executionRunId !== owner.runId && !successor)) {
           throw new Error("native_runner_checkpoint_owner_lost");
         }
@@ -116,7 +107,6 @@ export function nativeRunnerCheckpointWriter(db: Db, owner: Owner) {
 
 const authorities = new WeakMap<DurablePrpControlPlane, Map<string, ReturnType<typeof nativeRunnerCheckpointWriter>>>();
 
-/** Called for each run attachment, including the same live authority's warm handoff. */
 export async function registerNativeRunnerCheckpoint(input: {
   db: Db; binding: Binding; bootId: string; authority: DurablePrpControlPlane;
   authorityRunId?: string;
@@ -148,8 +138,6 @@ export async function registerNativeRunnerCheckpoint(input: {
     writers.set(input.binding.runId, async checkpoint => {
       try { await write(checkpoint); }
       catch (error) {
-        // Do not retain a live execution lease on a poisoned journal. Detach
-        // asynchronously so startup and persistence cannot wait on each other.
         void input.onFailure?.(authorityRunId).catch(() => undefined);
         throw error;
       }
@@ -185,7 +173,6 @@ export async function loadNativeRunnerCheckpoint(db: Db, binding: Binding): Prom
   return checkpoint;
 }
 
-/** Rebuild only the controller cache. Provider files and the running process remain in Daytona. */
 export async function restoreNativeRunnerCheckpoint(db: Db, binding: Binding, root: string) {
   const checkpoint = await loadNativeRunnerCheckpoint(db, binding);
   if (!checkpoint) return null;

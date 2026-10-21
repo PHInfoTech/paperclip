@@ -181,7 +181,6 @@ export async function evaluateNativeControllerTakeover(input: {
   isProcessAlive?: (pid: number) => boolean;
   readProcessStartedAt?: (pid: number) => Promise<Date | null>;
   requireStoppedController?: boolean;
-  /** Only for remote authorities whose every wire effect is fenced in Postgres. */
   remoteLeaseFenced?: boolean;
 }): Promise<{ allowed: boolean; reason: string }> {
   const { owner, now } = input;

@@ -916,9 +916,6 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
   async function recoverNativeRunsAfterRestart(now = new Date(), runIds?: string[]) {
     if (!runIds) {
       await reconcileRetainedWorkspaces(db, environmentRuntime, resumeRemoteStopComments);
-      // A result committed before the old controller stopped outranks process
-      // recovery. Finish its durable workspace/status suffix before deciding
-      // whether any provider authority needs to be reopened.
       await reconcileNativeFinalizations(db, undefined, {
         environmentRuntime,
         onWorkspaceSettled: settleRecoveredNativeWorkspace,
@@ -2153,9 +2150,6 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
       }
     }
 
-    // Startup can precede a crashed controller's lease expiry. Reuse this sweep
-    // to claim expired durable remote authorities, including overlap between
-    // old and new servers; no operator drain or separate polling loop is needed.
     const expiredRemoteAuthorities = await db.select({ runId: nativeRunFinalizations.runId })
       .from(nativeRunFinalizations)
       .innerJoin(nativeRunnerCheckpoints, and(

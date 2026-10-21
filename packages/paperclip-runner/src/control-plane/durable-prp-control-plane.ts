@@ -268,8 +268,6 @@ export interface DurablePrpControlPlaneOptions {
   }) => Promise<{ readonly result: unknown; readonly isError?: boolean }>;
   /** Persist the canonical event before the runner receives its cumulative ACK. */
   onCommittedEvent?: (event: PrpEvent) => Promise<void>;
-  /** Reconcile a saved input after controller replacement. Return only an
-   * authoritative outcome; null preserves an uncertain effect without replay. */
   recoverSemanticToolInput?: (
     input: Parameters<NonNullable<DurablePrpControlPlaneOptions["onSemanticToolInput"]>>[0],
   ) => Promise<{ readonly result: unknown; readonly isError?: boolean } | null>;
@@ -280,7 +278,6 @@ export interface DurablePrpControlPlaneOptions {
   connectionLeaseTtlMs?: number;
 }
 
-/** Private recovery material. Credentials in this snapshot must be encrypted at rest. */
 export interface DurablePrpCheckpoint {
   schema: "paperclip.runner.controller-checkpoint.v1";
   runnerVersion: string;
@@ -1585,7 +1582,6 @@ export class DurablePrpControlPlane {
     return this.#store;
   }
 
-  /** Install before exposing this authority. Every peer-visible effect waits for this store. */
   setCheckpointPersistence(persist: (checkpoint: DurablePrpCheckpoint) => Promise<void>): void {
     if (this.#connections.size > 0 || this.#persistCheckpoint !== null) {
       throw new Error("runner_controller_persistence_already_active");
@@ -1606,7 +1602,6 @@ export class DurablePrpControlPlane {
     this.#persistedRevision = this.#store.revision;
     const persist = this.#persistCheckpoint;
     this.#persistenceTail = this.#persistenceTail.then(() => persist(checkpoint));
-    // Failure closes transport; it never authorizes an unrecorded command or ACK.
     void this.#persistenceTail.catch(() => this.disconnectActiveRunner());
     return this.#persistenceTail;
   }
@@ -2101,8 +2096,6 @@ export class DurablePrpControlPlane {
       throw new CommandJournalLimitError("command_payload_too_large");
     this.#store.state.commands.push(command);
     this.#store.save();
-    // A tool can finish after the socket disconnects. Preserve its result even
-    // when no peer is currently available to trigger the wire barrier.
     void this.flushCheckpoint().catch(() => undefined);
     if (deliverImmediately) {
       for (const connection of this.#connections) {

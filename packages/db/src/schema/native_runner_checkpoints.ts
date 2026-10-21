@@ -1,7 +1,6 @@
 import { foreignKey, jsonb, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { heartbeatRuns } from "./heartbeat_runs.js";
 
-/** Private controller recovery journal. Never included in run API projections. */
 export const nativeRunnerCheckpoints = pgTable("native_runner_checkpoints", {
   companyId: uuid("company_id").notNull(),
   runId: uuid("run_id").notNull(),

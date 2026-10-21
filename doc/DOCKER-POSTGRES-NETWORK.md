@@ -181,7 +181,12 @@ Create the connection from the agent's **Connection** field → connect →
 | Authentication | No authentication |
 | Model IDs | the full `switchyard/…` ids, comma separated, e.g. `switchyard/deepseek-flash-qwen38, switchyard/qwen38, switchyard/ultra-qwen38` (`curl http://localhost:4000/v1/models` lists all) |
 
-Then choose a model on the agent. With this connection Paperclip writes its own
+Then set the agent's **Model ID** to a single id, such as
+`switchyard/deepseek-flash-qwen38`; Paperclip adds its own `paperclip/` prefix.
+Do not paste the comma-separated list there: the whole list is then sent as one
+model name and Switchyard answers "No route registered for model". To switch
+models, edit the agent's Model ID. The connection's model list cannot be edited
+after it is saved; create another connection to change it. With this connection Paperclip writes its own
 provider config for each run (OpenCode provider `paperclip`, or a Hermes
 `custom` provider), so the server-wide OpenCode provider and
 `docker/hermes/config.yaml` below are not used for that agent.

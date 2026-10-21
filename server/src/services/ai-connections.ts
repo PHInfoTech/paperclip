@@ -1,3 +1,4 @@
+import { DELIVERY_QUEUES, notifyDeliveryWork } from "./delivery-work-notifications.js";
 import { WORKSPACE_RESTORE_LOCK_TIMEOUT_CODE } from "@paperclipai/adapter-utils/workspace-restore-merge";
 import { withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
 import { syncConnectionCredentialBindings } from "./connection-credential-bindings.js";
@@ -887,6 +888,9 @@ export function aiConnectionService(db: Db) {
                 createdByUserId: userId,
               })),
             );
+      }
+      if (sessionId) {
+        await notifyDeliveryWork(tx, input.provider === "anthropic" ? DELIVERY_QUEUES.setupTokenCleanup : DELIVERY_QUEUES.adapterLoginCleanup);
       }
       if (sessionId)
         await tx

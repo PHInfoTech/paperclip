@@ -72,7 +72,7 @@ export function gradeFinalizationRecovery(value: FinalizationRecoveryObservation
 
 export function finalizationRecoveryDigest() {
   const hash = createHash("sha256");
-  for (const file of ["finalization-recovery.ts", "finalization-recovery-flow.ts", "finalization-delivery.ts", "finalization-crash-boundary.ts", "server.ts", "server-stop.ts", "registered-artifact.ts", "runner.spec.ts", "stock-harness.ts"])
+  for (const file of ["finalization-recovery.ts", "finalization-recovery-flow.ts", "run-delivery.ts", "finalization-crash-boundary.ts", "server.ts", "server-stop.ts", "registered-artifact.ts", "runner.spec.ts", "stock-harness.ts"])
     hash.update(file).update(readFileSync(new URL(file, import.meta.url)));
   return hash.digest("hex");
 }

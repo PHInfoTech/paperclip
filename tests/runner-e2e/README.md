@@ -100,6 +100,22 @@ pnpm test:e2e:runner -- --id automatic-repository-configured-models.runner-codex
 
 ## Finalization recovery
 
+The explicit-only `followup-stop-resume` suite has two local development cells
+using the configured Codex and Claude models and production hire instructions.
+It independently seeds a context file, verifies the first active checkpoint,
+sends one ordinary follow-up, presses Stop in the composer, and records an
+acknowledged cancelled run with no automatic path for at least five seconds.
+A later ordinary user message resumes the same task without restating the
+context or changed label. One successor must preserve workspace, instructions,
+and tool contract, and deliver an independently checked browser download.
+Missing an active boundary fails the attempt. These API-key development cells
+do not qualify staging subscription authentication, warm reuse, or Slack.
+
+```sh
+pnpm test:e2e:runner -- --list --suite followup-stop-resume
+pnpm test:e2e:runner -- --id followup-stop-resume.runner-codex.local.followup-stop-resume --max-automatic-retries 0
+```
+
 The explicit-only `finalization-recovery` suite has two development cells on
 Daytona: Codex `gpt-6.1-sol` and Claude `claude-opus-5-5`. It uses the production
 hire instructions and one provider admission. A 64 MiB random data file makes

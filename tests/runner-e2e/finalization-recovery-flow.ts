@@ -1,4 +1,4 @@
-import { waitForFinalizationDelivery } from "./finalization-delivery.js";
+import { waitForRunDelivery } from "./run-delivery.js";
 import { captureStockHarness, gradeStockHire } from "./stock-harness.js";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -123,7 +123,7 @@ export async function runFinalizationRecoveryFlow(input: {
       throw new Error("Restored binary is missing, linked, or the wrong size");
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(file)) hash.update(chunk);
-    const delivered = await waitForFinalizationDelivery({ binding: observation!.binding, agentId: fixtures.agent.id, deadlineAt: input.deadlineAt,
+    const delivered = await waitForRunDelivery({ binding: observation!.binding, agentId: fixtures.agent.id, deadlineAt: input.deadlineAt,
       load: async () => {
         await refresh();
         return { run: runs[0] ?? {}, runCount: runs.length, comments: await api.get<Row[]>(`/api/issues/${issue!.id}/comments`) };

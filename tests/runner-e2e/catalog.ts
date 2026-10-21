@@ -1,3 +1,4 @@
+import { followupStopTask, followupStopDigest } from "./followup-stop-resume.js";
 import { finalizationRecoveryTask, finalizationRecoveryDigest } from "./finalization-recovery.js";
 import { necessaryQuestionTask, necessaryQuestionDigest } from "./necessary-question.js";
 import { caseHandoffTask, caseHandoffDefinitionDigest } from "./case-handoffs-cases.js";
@@ -1187,6 +1188,16 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
     expectedMatrixSize: 3,
     definitionMetadata: { version: 1, definitionDigest: taskWorkspaceDefinitionDigest(), scheduling: "explicit-only", providerTurns: 3,
       attempts: 1, budgetMonthlyCents: 1000, project: "none", cwd: "unconfigured-task-default", oracle: "public-file-download-and-host-nested-git", remoteLifecycle: "per_turn" },
+  },
+  {
+    id: "followup-stop-resume", label: "Follow-up, Stop and retained-context resumption", manualOnly: true,
+    description: "Send an ordinary follow-up during active work, Stop through the task composer, observe a quiet cancelled run, then explicitly resume and download retained context with the earlier direction.",
+    groups: [], profiles: repositoryModelProfiles.map(({ native }) => productionDefaultHireProfile(native)),
+    environments: runnerEnvironments.filter(environment => environment.id === "local"), tasks: [followupStopTask], expectedMatrixSize: 2,
+    definitionMetadata: { version: 1, definitionDigest: followupStopDigest(), scheduling: "explicit-only", attempts: 1,
+      providerTurns: 2, budgetMonthlyCents: 1000, instructions: "production-default", stopObservationWindowMs: 5000,
+      surface: "paperclip", target: "isolated-development-instance", authentication: "api-key", stagingAuthentication: "subscription",
+      stagingQualification: false, unexercisedBoundaryIsFailure: true },
   },
   {
     id: "finalization-recovery", label: "Preserve completed work through finalization restart", manualOnly: true,

@@ -23,6 +23,7 @@ export type RunnerTaskFlow =
   | "automatic_repository"
   | "repository_verification"
   | "finalization_recovery"
+  | "followup_stop_resume"
   | "repository_skills"
   | "provider_connection"
   | "plan_task_guidance"

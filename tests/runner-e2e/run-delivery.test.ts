@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { inspectFinalizationDelivery, waitForFinalizationDelivery } from "./finalization-delivery.js";
+import { inspectRunDelivery, waitForRunDelivery } from "./run-delivery.js";
 
 function fixture() {
   const binding = { companyId: "company", issueId: "task", runId: "run" };
@@ -8,12 +8,12 @@ function fixture() {
       issueCommentSatisfiedByCommentId: "reply", resultJson: { nativeResult: { summary: "Internal saved result." },
         presentationDecision: { schema: "paperclip.run_presentation_decision.v1", chosenSource: "final_agent_message", commentAction: "create", commentId: "reply" } } },
     comments: [{ id: "reply", companyId: "company", issueId: "task", authorAgentId: "agent", createdByRunId: "run",
-      body: "Here is your downloadable proof.", deletedAt: null }] };
+      body: "Here is your downloadable proof.", deletedAt: null as string | null }] };
 }
 
 describe("finalization final delivery observation", () => {
   it("accepts the persisted final message through its receipt and presentation identity", () => {
-    const observed = inspectFinalizationDelivery(fixture());
+    const observed = inspectRunDelivery(fixture());
     expect(observed.finalDeliveryCount).toBe(1);
     expect(observed.deliveryReceiptMatches).toBe(true);
     expect(JSON.stringify(observed)).not.toContain("downloadable proof");
@@ -22,7 +22,7 @@ describe("finalization final delivery observation", () => {
     const state = fixture();
     state.comments[0]!.body = state.run.resultJson.nativeResult.summary;
     state.comments.push({ ...state.comments[0]!, id: "duplicate", body: "A second different final reply." });
-    const observed = inspectFinalizationDelivery(state);
+    const observed = inspectRunDelivery(state);
     expect(observed.finalDeliveryCount).toBe(2);
     expect(observed.deliveryReceiptMatches).toBe(false);
   });
@@ -35,14 +35,14 @@ describe("finalization final delivery observation", () => {
     if (kind === "receipt") state.run.issueCommentSatisfiedByCommentId = "foreign";
     if (kind === "deleted") state.comments[0]!.deletedAt = "2026-10-21T12:00:00Z";
     if (kind === "blank") state.comments[0]!.body = "  ";
-    expect(inspectFinalizationDelivery(state).deliveryReceiptMatches).toBe(false);
+    expect(inspectRunDelivery(state).deliveryReceiptMatches).toBe(false);
   });
   it("waits across commit, comment creation, and the later receipt write", async () => {
     const state = fixture();
     const load = vi.fn().mockResolvedValueOnce({ ...state, comments: [], run: { ...state.run, issueCommentStatus: "pending", issueCommentSatisfiedByCommentId: null } })
       .mockResolvedValueOnce({ ...state, run: { ...state.run, issueCommentStatus: "pending", issueCommentSatisfiedByCommentId: null } })
       .mockResolvedValue(state);
-    const result = await waitForFinalizationDelivery({ ...state, deadlineAt: Date.now() + 1000, intervalMs: 0, load });
+    const result = await waitForRunDelivery({ ...state, deadlineAt: Date.now() + 1000, intervalMs: 0, load });
     expect(load).toHaveBeenCalledTimes(3);
     expect(result.delivery.deliveryReceiptMatches).toBe(true);
     expect(result.run.issueCommentSatisfiedByCommentId).toBe("reply");
@@ -52,7 +52,7 @@ describe("finalization final delivery observation", () => {
     if (kind === "duplicate") state.comments.push({ ...state.comments[0]!, id: "duplicate", body: "Second reply" });
     else state.runCount++;
     const load = vi.fn().mockResolvedValue(state);
-    await expect(waitForFinalizationDelivery({ ...state, deadlineAt: Date.now() + 1000, intervalMs: 0, load }))
+    await expect(waitForRunDelivery({ ...state, deadlineAt: Date.now() + 1000, intervalMs: 0, load }))
       .rejects.toThrow(kind === "duplicate" ? "duplicate final replies" : "repeated provider admission");
     expect(load).toHaveBeenCalledOnce();
   });

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { pollUntil } from "./api.js";
-import type { FinalizationCrashBinding } from "./finalization-crash-boundary.js";
+type RunDeliveryBinding = { companyId: string; issueId: string; runId: string };
 
 type Row = Record<string, any>;
-export function inspectFinalizationDelivery(input: { binding: FinalizationCrashBinding; agentId: string; run: Row; comments: Row[] }) {
+export function inspectRunDelivery(input: { binding: RunDeliveryBinding; agentId: string; run: Row; comments: Row[] }) {
   const { run, binding } = input, presentation = run.resultJson?.presentationDecision;
   const replies = input.comments.filter(comment => comment.companyId === binding.companyId && comment.issueId === binding.issueId &&
     comment.authorAgentId === input.agentId && comment.createdByRunId === binding.runId && !comment.deletedAt);
@@ -20,15 +20,15 @@ export function inspectFinalizationDelivery(input: { binding: FinalizationCrashB
       bodySha256: createHash("sha256").update(String(comment.body ?? "").trim()).digest("hex") })) };
 }
 
-export async function waitForFinalizationDelivery(input: {
-  binding: FinalizationCrashBinding; agentId: string; deadlineAt: number; intervalMs?: number;
+export async function waitForRunDelivery(input: {
+  binding: RunDeliveryBinding; agentId: string; deadlineAt: number; intervalMs?: number;
   load(): Promise<{ run: Row; comments: Row[]; runCount: number }>;
 }) {
   return pollUntil({ label: "one persisted final reply and its matching delivery receipt", deadlineAt: input.deadlineAt,
     intervalMs: input.intervalMs ?? 500,
     load: async () => {
       const state = await input.load();
-      return { ...state, delivery: inspectFinalizationDelivery({ ...input, ...state }) };
+      return { ...state, delivery: inspectRunDelivery({ ...input, ...state }) };
     },
     accept: state => state.runCount === 1 && state.delivery.deliveryReceiptMatches,
     reject: state => state.runCount !== 1 ? "Final delivery repeated provider admission" :

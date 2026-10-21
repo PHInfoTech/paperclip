@@ -1,3 +1,4 @@
+import { runFollowupStopResumeFlow } from "./followup-stop-resume-flow.js";
 import { runFinalizationRecoveryFlow } from "./finalization-recovery-flow.js";
 import type { FinalizationCrashBinding } from "./finalization-crash-boundary.js";
 import { runCaseHandoffsFlow } from "./case-handoffs-flow.js";
@@ -1028,6 +1029,15 @@ for (const execution of executions) {
           matcherResults,
         }, secrets);
         await captureScreenshot("final-state", "Final visible task state", "final-state.png");
+      } else if (execution.task.flow === "followup_stop_resume") {
+        const journey = await runFollowupStopResumeFlow({ page, api, fixtures, execution, nonce, workspacePath: workspacePath!, temporaryRoot,
+          deadlineAt: startedAtMs + deadlineMs - 30_000,
+          observe: (currentIssue, currentRuns, checks) => {
+            issue = currentIssue as IssueRecord; selectedRuns = currentRuns as RunRecord[];
+            matcherResults = checks.map(check => ({ matcher: { kind: "json_path" as const, path: `followupStopResume.${check.id}`, expected: true }, passed: check.passed, detail: check.detail }));
+          }, capture: captureScreenshot, evidence: (name, data) => writeSanitizedJson(snapshotsDir, name, data, secrets),
+        });
+        issue = journey.issue as IssueRecord; selectedRuns = journey.runs as RunRecord[];
       } else if (execution.task.flow === "finalization_recovery") {
         const journey = await runFinalizationRecoveryFlow({ page, api, fixtures, execution, nonce, temporaryRoot,
           deadlineAt: startedAtMs + deadlineMs - 30_000,

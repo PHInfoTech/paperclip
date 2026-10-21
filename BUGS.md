@@ -58,6 +58,9 @@ Otherwise, as in published npm bundles, the server keeps its own root.
 - `installed-provider-authority.test.ts` and `installation-integrity.test.ts`:
   86 passed, 1 skipped.
 - `pnpm --filter @paperclipai/paperclip-runner typecheck` passes.
+- In the rebuilt container, `resolveInstalledProviderAuthority` returns root
+  `/app` with manifest `/app/server/package.json`, and
+  `@agentclientprotocol/claude-agent-acp` resolves without error.
 
 **Review note.** This code decides which installed packages the Runner trusts.
 The change reuses a rule the daemon already applied rather than adding a new

@@ -46,7 +46,9 @@ observer must download that source-attributed artifact while only the first
 admission is running, before the successor starts. A missing original, late
 observation, or different successor-created reference fails qualification. The
 successor is instructed to stop on a missing file and never recreate it. Both admissions
-must retain one workspace and commit their native results. The fixture uses
+must retain one workspace and commit their native results. The successor must
+have its own dispatch receipt and saved native intent. It starts after the
+predecessor finishes; dispatch must not retag the predecessor. The fixture uses
 production hire instructions and records the selected catalog model. These four
 development cells do not qualify Slack, staging configurations, migration,
 finalization restart, or the complete dependable-work milestone.

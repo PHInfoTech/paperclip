@@ -42,6 +42,9 @@ export interface AutomaticRepositoryObservation {
   firstContextAttributed: boolean;
   firstContextObservedAt: number | null;
   successorStartedAt: number | null;
+  predecessorFinishedAt: number | null;
+  predecessorRetagged: boolean;
+  continuationReceipt: { intentId: string; dispatchId: string } | null;
   actualReadme: string | null;
   actualCommit: string | null;
   downloaded: { reference?: unknown; readme?: unknown; commit?: unknown } | null;
@@ -65,8 +68,13 @@ export function gradeAutomaticRepository(value: AutomaticRepositoryObservation) 
   return [
     check("durable-completion", value.issueDone && value.runCount === 2 && value.successfulCommittedRuns === 2,
       "Two committed provider admissions must finish the requested result."),
-    check("server-owned-continuation", value.sourceContinuation === "same_agent" && value.successorSource === "native_status_decision" && !value.monitorScheduled,
-      "Repository setup must continue through the saved same-agent wake without a timer or user message."),
+    check("server-owned-continuation", value.sourceContinuation === "same_agent" && value.successorSource === "native_status_decision" && !value.monitorScheduled &&
+      !value.predecessorRetagged && value.predecessorFinishedAt !== null && value.successorStartedAt !== null &&
+      value.successorStartedAt >= value.predecessorFinishedAt && value.continuationReceipt !== null &&
+      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.continuationReceipt.intentId) &&
+      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.continuationReceipt.dispatchId) &&
+      value.continuationReceipt.intentId !== value.continuationReceipt.dispatchId,
+      "The saved same-agent intent must bind a distinct successor dispatch after the unmodified predecessor finishes, without a timer or user message."),
     check("retained-workspace", value.workspaceIds.length === 2 && Boolean(value.workspaceIds[0]) && value.workspaceIds.every(id => id === value.workspaceIds[0]) && value.readyRepository,
       "Both admissions must retain the same task workspace and its prepared repository."),
     check("retained-context", value.firstContextAttributed && value.firstContextObservedAt !== null && value.successorStartedAt !== null &&

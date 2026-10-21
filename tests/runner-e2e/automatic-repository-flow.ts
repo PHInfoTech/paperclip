@@ -27,7 +27,7 @@ export async function runAutomaticRepositoryFlow(input: {
   const observation: AutomaticRepositoryObservation = { reference: "", issueDone: false, runCount: 0,
     successfulCommittedRuns: 0, sourceContinuation: null, successorSource: null, workspaceIds: [], readyRepository: false,
     savedContext: null, firstSavedContext: null, firstContextAttributed: false,
-    firstContextObservedAt: null, successorStartedAt: null,
+    firstContextObservedAt: null, successorStartedAt: null, predecessorFinishedAt: null, predecessorRetagged: true, continuationReceipt: null,
     actualReadme: null, actualCommit: null, downloaded: null, downloadVerified: false,
     visibleDelivery: false, pendingInteractions: -1, monitorScheduled: false };
   async function refresh() {
@@ -44,6 +44,10 @@ export async function runAutomaticRepositoryFlow(input: {
     observation.sourceContinuation = runs[0]?.resultJson?.nativeResult?.continuation?.kind ?? null;
     observation.successorSource = runs[1]?.contextSnapshot?.source ?? null;
     observation.successorStartedAt = runs[1]?.startedAt ? Date.parse(runs[1].startedAt) : null;
+    observation.predecessorFinishedAt = runs[0]?.finishedAt ? Date.parse(runs[0].finishedAt) : null;
+    observation.predecessorRetagged = Boolean(runs[0]?.contextSnapshot?.nativeStatusWakeIntentId);
+    const intentId = runs[1]?.contextSnapshot?.nativeStatusWakeIntentId, dispatchId = runs[1]?.wakeupRequestId;
+    observation.continuationReceipt = typeof intentId === "string" && typeof dispatchId === "string" ? { intentId, dispatchId } : null;
     if (runs.length === 1 && runs[0]?.status === "running" && observation.firstContextObservedAt === null) {
       const original = await readRegisteredArtifacts(api, issue.id, runs[0].id, [files.context]).catch(() => null);
       if (original?.[0]) {

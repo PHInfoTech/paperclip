@@ -2,7 +2,10 @@
 # named bridge network and keeps PostgreSQL off the host. The server reaches the
 # database by its service name (`db`) over this network.
 #
-#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.network.yml up -d --build
+#   docker compose -p paperclip -f docker/docker-compose.yml -f docker/docker-compose.network.yml up -d --build
+#
+# It also exposes the host's Switchyard router to OpenCode agents (see
+# doc/DOCKER-POSTGRES-NETWORK.md, "Local models through Switchyard").
 services:
   db:
     ports: !reset []
@@ -10,6 +13,50 @@ services:
       - paperclip-net
 
   server:
+    # Reach services published on the host (Switchyard, vLLM) from the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Local Switchyard router (OpenAI-compatible, http://localhost:4000/v1 on the
+      # host) as an OpenCode provider. OpenCode reads this for `opencode models`
+      # (the agent model picker) and Paperclip merges it into each run's config.
+      # Switchyard needs the full `switchyard/...` id, so each short key maps to
+      # it through `id`. Refresh the list when Switchyard's routes change.
+      OPENCODE_CONFIG_CONTENT: |
+        {
+          "model": "switchyard/deepseek-flash-qwen38",
+          "provider": {
+            "switchyard": {
+              "npm": "@ai-sdk/openai-compatible",
+              "name": "Switchyard (local)",
+              "options": {"baseURL": "http://host.docker.internal:4000/v1", "apiKey": "local"},
+              "models": {
+              "deepseek-flash-only": {"id": "switchyard/deepseek-flash-only", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "deepseek-flash-qwen38": {"id": "switchyard/deepseek-flash-qwen38", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "lightning-escalates-to-ultra": {"id": "switchyard/lightning-escalates-to-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "lightning-only": {"id": "switchyard/lightning-only", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "lightning-reviewed-by-ultra": {"id": "switchyard/lightning-reviewed-by-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ornith35": {"id": "switchyard/ornith35", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ornith35-escalates-to-ultra": {"id": "switchyard/ornith35-escalates-to-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ornith35-reviewed-by-ultra": {"id": "switchyard/ornith35-reviewed-by-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ornith9": {"id": "switchyard/ornith9", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ornith9-escalates-to-ultra": {"id": "switchyard/ornith9-escalates-to-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ornith9-reviewed-by-ultra": {"id": "switchyard/ornith9-reviewed-by-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "qwen38": {"id": "switchyard/qwen38", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "qwen38-escalates-to-ultra": {"id": "switchyard/qwen38-escalates-to-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "qwen38-reviewed-by-ultra": {"id": "switchyard/qwen38-reviewed-by-ultra", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-nemotron-3.5-Lightning": {"id": "switchyard/ultra-nemotron-3.5-Lightning", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-ornith35": {"id": "switchyard/ultra-ornith35", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-ornith9": {"id": "switchyard/ultra-ornith9", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-qwen38": {"id": "switchyard/ultra-qwen38", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-reviewed-by-lightning": {"id": "switchyard/ultra-reviewed-by-lightning", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-reviewed-by-ornith35": {"id": "switchyard/ultra-reviewed-by-ornith35", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-reviewed-by-ornith9": {"id": "switchyard/ultra-reviewed-by-ornith9", "tool_call": true, "limit": {"context": 262144, "output": 32768}},
+              "ultra-reviewed-by-qwen38": {"id": "switchyard/ultra-reviewed-by-qwen38", "tool_call": true, "limit": {"context": 262144, "output": 32768}}
+              }
+            }
+          }
+        }
     networks:
       - paperclip-net
 

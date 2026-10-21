@@ -104,6 +104,40 @@ pc-compose up -d --build      # Rebuild after pulling new code
 
 The alias uses relative paths, so run it from the project root.
 
+## Local models through Switchyard
+
+The override also makes the host's local Switchyard router
+(`http://localhost:4000/v1`, OpenAI-compatible) available to **OpenCode**
+agents:
+
+- `extra_hosts: host.docker.internal:host-gateway` lets the container reach
+  services published on the host, as `http://host.docker.internal:<port>`.
+- `OPENCODE_CONFIG_CONTENT` defines an OpenCode provider named `switchyard`
+  with every Switchyard model. OpenCode reads it to list models in the agent
+  model picker, and Paperclip merges it into each run's config. The default is
+  `switchyard/deepseek-flash-qwen38`.
+
+To use it, create or edit an agent, choose the **OpenCode** harness, and pick a
+`switchyard/…` model. Switch models at any time by changing the agent's model.
+
+Switchyard routes need the full `switchyard/<route>` id, so each short model key
+maps to it through `id`. When Switchyard's routes change, regenerate the list
+from `curl http://localhost:4000/v1/models` and run `up -d` to apply it.
+
+Check from inside the container:
+
+```sh
+pc-compose exec -u node server opencode models | grep '^switchyard/'
+```
+
+Other harnesses can use custom OpenAI-compatible providers through
+`PAPERCLIP_CODEX_PROVIDERS` and `PAPERCLIP_PI_PROVIDERS`; they are not
+configured here. Codex would need a per-agent provider selection, because a
+server-wide one would also redirect Codex subscription agents.
+
+vLLM's `qwen38` (`http://localhost:8001/v1`) is reachable the same way, but
+Switchyard already exposes it as `switchyard/qwen38`.
+
 ## Where data lives
 
 | Volume | Contents |

@@ -252,6 +252,7 @@ async function restartIsolatedPaperclipServer(input: {
   requestId: string;
   deadlineAt: number;
   preserveRunner?: RestartRunnerIdentity;
+  discardControllerCache?: boolean;
 }): Promise<void> {
   const {
     controlDirectory,
@@ -262,7 +263,8 @@ async function restartIsolatedPaperclipServer(input: {
   const temporaryRequestPath = `${requestPath}.${process.pid}.${input.requestId}.tmp`;
   await writeFile(
     temporaryRequestPath,
-    JSON.stringify({ requestId: input.requestId, ...(input.preserveRunner ? { preserveRunner: input.preserveRunner } : {}) }),
+    JSON.stringify({ requestId: input.requestId, discardControllerCache: input.discardControllerCache === true,
+      ...(input.preserveRunner ? { preserveRunner: input.preserveRunner } : {}) }),
     { encoding: "utf8", mode: 0o600 },
   );
   await rename(temporaryRequestPath, requestPath);
@@ -283,7 +285,8 @@ async function restartIsolatedPaperclipServer(input: {
     },
     accept: (acknowledgement) =>
       acknowledgement.requestId === input.requestId &&
-      acknowledgement.status === "ready",
+      acknowledgement.status === "ready" &&
+      (!input.discardControllerCache || acknowledgement.controllerCacheDiscarded === true),
     reject: (acknowledgement) =>
       acknowledgement.requestId === input.requestId &&
       acknowledgement.status === "failed"
@@ -1157,7 +1160,9 @@ for (const execution of executions) {
         const story = await runEverydayFlow({
           page, api, fixtures, execution, nonce, workspacePath, privateDir,
           deadlineAt: startedAtMs + deadlineMs,
-          restart: () => restartIsolatedPaperclipServer({ api, requestId: `story-${nonce}`, deadlineAt: startedAtMs + deadlineMs }),
+          restart: () => restartIsolatedPaperclipServer({ api, requestId: `story-${nonce}`, deadlineAt: startedAtMs + deadlineMs,
+            discardControllerCache: execution.task.id === "recover-controller" && execution.environment.id === "daytona"
+              && execution.profile.generation === "native" && execution.profile.provider === "codex" }),
           observe: (storyIssue, storyRuns) => { issue = storyIssue; selectedRuns = storyRuns; },
           capture: captureScreenshot,
           evidence: (name, data) => writeSanitizedJson(snapshotsDir, name, data, secrets),

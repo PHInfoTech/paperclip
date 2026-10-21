@@ -249,6 +249,7 @@ async function waitForHealthToStop() {
 interface RestartRequest {
   requestId: string;
   preserveRunner?: RestartRunnerIdentity;
+  discardControllerCache?: boolean;
 }
 
 async function readRestartRequest(): Promise<RestartRequest | null> {
@@ -275,13 +276,23 @@ async function readRestartRequest(): Promise<RestartRequest | null> {
     return null;
   }
   const preserveRunner = (value as { preserveRunner?: unknown }).preserveRunner;
-  return { requestId, ...(preserveRunner === undefined ? {} : { preserveRunner: parseRestartRunnerIdentity(preserveRunner) }) };
+  const discardControllerCache = (value as { discardControllerCache?: unknown }).discardControllerCache === true;
+  if (discardControllerCache && !executionIds.some(id => {
+    const execution = runnerMatrix.find(row => row.id === id);
+    return execution?.suite.id === "everyday-workflows" && execution.task.id === "recover-controller"
+      && execution.environment.id === "daytona" && execution.profile.generation === "native" && execution.profile.provider === "codex";
+  })) {
+    throw new Error("Controller cache replacement requires the explicit remote Codex restart cell");
+  }
+  return { requestId, discardControllerCache,
+    ...(preserveRunner === undefined ? {} : { preserveRunner: parseRestartRunnerIdentity(preserveRunner) }) };
 }
 
 async function writeRestartAck(
   requestId: string,
   status: "ready" | "failed",
   message?: string,
+  controllerCacheDiscarded = false,
 ) {
   const temporaryAckPath = `${restartAckPath}.${process.pid}.tmp`;
   await writeFile(
@@ -289,6 +300,7 @@ async function writeRestartAck(
     `${JSON.stringify({
       requestId,
       status,
+      controllerCacheDiscarded,
       completedAt: new Date().toISOString(),
       ...(message ? { message } : {}),
     })}\n`,
@@ -297,7 +309,7 @@ async function writeRestartAck(
   await rename(temporaryAckPath, restartAckPath);
 }
 
-async function restartServer({ requestId, preserveRunner }: RestartRequest) {
+async function restartServer({ requestId, preserveRunner, discardControllerCache }: RestartRequest) {
   activeRestartRequestId = requestId;
   appendLog(`\nRestart request ${requestId}: stopping Paperclip\n`);
   const previous = child;
@@ -308,6 +320,13 @@ async function restartServer({ requestId, preserveRunner }: RestartRequest) {
   // Do not mistake an orphaned old server for a healthy replacement. The port
   // must stop answering before the next launcher is allowed to start.
   await waitForHealthToStop();
+  if (discardControllerCache) {
+    // Keep the old cache in private evidence, outside all product lookup paths.
+    // Retain the database and instance encryption key as a deployment would.
+    const cache = path.join(paperclipHome, "instances", required("PAPERCLIP_INSTANCE_ID"), "runtime", "paperclip-runner");
+    await rename(cache, path.join(controlDirectory, `retired-controller-cache-${requestId}`));
+    appendLog(`Restart request ${requestId}: old controller cache made unavailable\n`);
+  }
   if (shutdownRequested()) {
     throw new Error("Wrapper shutdown interrupted the Paperclip restart");
   }
@@ -318,7 +337,7 @@ async function restartServer({ requestId, preserveRunner }: RestartRequest) {
   if (shutdownRequested()) {
     throw new Error("Wrapper shutdown interrupted the Paperclip restart");
   }
-  await writeRestartAck(requestId, "ready");
+  await writeRestartAck(requestId, "ready", undefined, discardControllerCache);
   appendLog(`Restart request ${requestId}: Paperclip is healthy\n`);
   activeRestartRequestId = null;
 }

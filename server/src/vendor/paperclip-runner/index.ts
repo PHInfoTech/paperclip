@@ -68,6 +68,7 @@ export type {
   RunnerExecutionDriver,
   RunnerLaunchPreparer,
   DurableRecoveryIdentity,
+  DurablePrpCheckpoint,
   RunnerProcessHandle,
   RunnerProcessLaunchSpec,
   StrictCompletionContractInput,

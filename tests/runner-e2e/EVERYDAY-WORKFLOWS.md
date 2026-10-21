@@ -51,6 +51,12 @@ The native Codex Daytona restart cell now requires a completed native tool
 receipt while that revision is still running. Before and after restart it pins
 the same run, normalized session, Runner identity, PID/start time, and active
 sandbox lease. The original receipt prefix must remain unchanged. A run that
+uses this native Codex remote cell also loses the old controller runtime cache
+between stopping and starting the server. The harness moves it into private
+evidence outside product lookup paths and requires an acknowledgement of that
+fault. Postgres and the instance encryption key survive. This checks deployment
+recovery without relying on the old controller journal or local warm-session cache.
+A run that
 ends before either active observation leaves the fault boundary unexercised;
 it cannot pass from the final ZIP alone. The cell no longer exempts an original
 Codex remote run that fails with `process_lost` and is replaced.

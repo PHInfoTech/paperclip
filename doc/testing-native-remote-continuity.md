@@ -65,3 +65,48 @@ pnpm exec vitest run \
 The caller owns the disposable container. Remove it after the run, including
 after failure; failed cases can retain remote processes and files for inspection.
 The test cleans up its database and host session directories.
+
+## Replacing the main server
+
+Remote native runners admitted with durable controller persistence tolerate up
+to five minutes without the main server. The sandbox keeps its process, provider
+turn and event outbox. Server-dependent tools wait for reconnection; work already
+accepted into the queue resumes through normal admission. A single offline web
+server cannot accept new HTTP requests during that interval.
+
+Retain Postgres and the instance secret encryption key across deployments. The
+private `native_runner_checkpoints` journal holds encrypted authentication state,
+commands, and acknowledged event cursors. These records are company/run scoped
+and are not part of public run projections. The replacement reconstructs its
+local controller cache and authenticates the recorded running artifact, even
+when its own installed runner binary differs. It does not stage a new binary
+over the running process.
+
+Remote execution leases expire after 60 seconds and renew every 20 seconds.
+Graceful shutdown detaches and releases the lease. Startup and the existing
+orphan sweep claim eligible expired owners; another container's PID is not
+ownership proof. The runner reconnect window is seven minutes, providing margin
+for the five-minute outage, lease expiry, and connection setup. Stop, company
+scope and normal admission gates retain precedence. A completed tool receipt can
+restore a lost response. Safe reads recheck current authority. An uncertain
+external mutation is not executed again without outcome evidence.
+
+The first rollout does not extend grace already configured in an old runner.
+The contract starts with runners admitted by the updated server. Legacy stdio
+adapters, database loss and destroyed sandboxes are outside this guarantee.
+
+The empty-controller-cache test uses a real Rust runner and scripted provider
+in separate directories, removes the controller directory, then restores solely
+from Postgres. It checks unchanged runner/provider process identities and one
+provider turn start. Build the host runner and fake provider first, then run:
+
+```sh
+PAPERCLIP_TEST_CONTROLLER_OUTAGE_MS=300000 pnpm exec vitest run \
+  server/src/services/native-runtime/native-runner-restart-recovery.integration.test.ts \
+  -t 'adopts the same runner from Postgres' --maxWorkers=1
+```
+
+This is protocol and persistence evidence. The separate
+`everyday-workflows.runner-codex.daytona.recover-controller` Product E2E cell
+qualifies the actual Daytona/provider path, including completion and workspace
+finalization. Neither test substitutes for the other's failure boundary.

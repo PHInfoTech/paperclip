@@ -37,6 +37,7 @@ export {
   RUNNER_PRP_PROTOCOL_MAX,
   inspectWarmRunTransition,
   type DurablePrpControlPlaneOptions,
+  type DurablePrpCheckpoint,
   type PrpWireConnection,
   type PrpWireAttachment,
   type TransportCloseReason,

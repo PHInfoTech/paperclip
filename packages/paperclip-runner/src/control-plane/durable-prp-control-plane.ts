@@ -268,11 +268,24 @@ export interface DurablePrpControlPlaneOptions {
   }) => Promise<{ readonly result: unknown; readonly isError?: boolean }>;
   /** Persist the canonical event before the runner receives its cumulative ACK. */
   onCommittedEvent?: (event: PrpEvent) => Promise<void>;
+  /** Reconcile a saved input after controller replacement. Return only an
+   * authoritative outcome; null preserves an uncertain effect without replay. */
+  recoverSemanticToolInput?: (
+    input: Parameters<NonNullable<DurablePrpControlPlaneOptions["onSemanticToolInput"]>>[0],
+  ) => Promise<{ readonly result: unknown; readonly isError?: boolean } | null>;
   /** Stop this exact owner after a proven, authenticated permanent integrity fault. */
   onProtocolIntegrityError?: (
     error: NativeSessionProtocolIntegrityError,
   ) => void;
   connectionLeaseTtlMs?: number;
+}
+
+/** Private recovery material. Credentials in this snapshot must be encrypted at rest. */
+export interface DurablePrpCheckpoint {
+  schema: "paperclip.runner.controller-checkpoint.v1";
+  runnerVersion: string;
+  runnerDigest: string;
+  state: StoredCoreState;
 }
 
 export interface RunnerProcessResult {
@@ -1218,6 +1231,7 @@ class DurableCoreStore {
   readonly path: string;
   #state: StoredCoreState;
   #writeIndeterminate = false;
+  revision = 0;
 
   constructor(directory: string, identity: DurableRecoveryIdentity) {
     try {
@@ -1256,6 +1270,7 @@ class DurableCoreStore {
   save(): void {
     this.assertWritable();
     atomicPrivateWrite(this.path, `${JSON.stringify(this.#state, null, 2)}\n`);
+    this.revision += 1;
   }
 
   assertWritable(): void {
@@ -1271,6 +1286,7 @@ class DurableCoreStore {
     try {
       atomicPrivateWrite(this.path, `${JSON.stringify(candidate, null, 2)}\n`);
       this.#state = candidate;
+      this.revision += 1;
     } catch (error) {
       // Rename may already have succeeded before directory fsync failed.
       // Never overwrite that possibly durable receipt using stale memory.
@@ -1516,10 +1532,15 @@ export class DurablePrpControlPlane {
   #port: number | null = null;
   #onSemanticToolInput?: DurablePrpControlPlaneOptions["onSemanticToolInput"];
   #onCommittedEvent?: DurablePrpControlPlaneOptions["onCommittedEvent"];
+  #recoverSemanticToolInput?: DurablePrpControlPlaneOptions["recoverSemanticToolInput"];
   #beforeAuthenticatedConnection?: DurablePrpControlPlaneOptions["beforeAuthenticatedConnection"];
   #onProtocolIntegrityError?: DurablePrpControlPlaneOptions["onProtocolIntegrityError"];
   #protocolIntegrityError: NativeSessionProtocolIntegrityError | null = null;
   #connectionLeaseTtlMs: number;
+  #persistCheckpoint: ((checkpoint: DurablePrpCheckpoint) => Promise<void>) | null = null;
+  #persistedRevision = -1;
+  #persistenceTail = Promise.resolve();
+  #sendQueues = new Map<AuthorityConnection, Promise<void>>();
 
   constructor(options: DurablePrpControlPlaneOptions) {
     if (
@@ -1554,6 +1575,7 @@ export class DurablePrpControlPlane {
     }
     this.#onSemanticToolInput = options.onSemanticToolInput;
     this.#onCommittedEvent = options.onCommittedEvent;
+    this.#recoverSemanticToolInput = options.recoverSemanticToolInput;
     this.#beforeAuthenticatedConnection = options.beforeAuthenticatedConnection;
     this.#onProtocolIntegrityError = options.onProtocolIntegrityError;
     this.#connectionLeaseTtlMs = options.connectionLeaseTtlMs ?? 60_000;
@@ -1561,6 +1583,49 @@ export class DurablePrpControlPlane {
 
   get store(): DurablePrpControlPlaneStore {
     return this.#store;
+  }
+
+  /** Install before exposing this authority. Every peer-visible effect waits for this store. */
+  setCheckpointPersistence(persist: (checkpoint: DurablePrpCheckpoint) => Promise<void>): void {
+    if (this.#connections.size > 0 || this.#persistCheckpoint !== null) {
+      throw new Error("runner_controller_persistence_already_active");
+    }
+    this.#persistCheckpoint = persist;
+  }
+
+  flushCheckpoint(): Promise<void> {
+    if (!this.#persistCheckpoint || this.#persistedRevision === this.#store.revision) {
+      return this.#persistenceTail;
+    }
+    const checkpoint: DurablePrpCheckpoint = {
+      schema: "paperclip.runner.controller-checkpoint.v1",
+      runnerVersion: this.#expectedRunnerVersion,
+      runnerDigest: this.#expectedRunnerDigest,
+      state: structuredClone(this.#store.state),
+    };
+    this.#persistedRevision = this.#store.revision;
+    const persist = this.#persistCheckpoint;
+    this.#persistenceTail = this.#persistenceTail.then(() => persist(checkpoint));
+    // Failure closes transport; it never authorizes an unrecorded command or ACK.
+    void this.#persistenceTail.catch(() => this.disconnectActiveRunner());
+    return this.#persistenceTail;
+  }
+
+  #sendJson(connection: AuthorityConnection, value: unknown): void {
+    if (!this.#persistCheckpoint) {
+      connection.sendJson(value);
+      return;
+    }
+    const checkpoint = this.flushCheckpoint();
+    const frame = structuredClone(value);
+    const sending = (this.#sendQueues.get(connection) ?? Promise.resolve())
+      .then(() => checkpoint)
+      .then(() => connection.sendJson(frame))
+      .catch(() => connection.close());
+    this.#sendQueues.set(connection, sending);
+    void sending.finally(() => {
+      if (this.#sendQueues.get(connection) === sending) this.#sendQueues.delete(connection);
+    });
   }
 
   getCommand(commandId: string): DurableRecoveryCoreCommand | undefined {
@@ -1576,6 +1641,31 @@ export class DurablePrpControlPlane {
         ? this.#store.state.completedWarmTransition.command
         : undefined)
     );
+  }
+
+  async recoverPendingSemanticInputs(): Promise<void> {
+    if (!this.#recoverSemanticToolInput) return;
+    const identity = this.#identity;
+    for (const saved of [...this.#store.state.committedEvents]) {
+      if (!unsettledSemanticInput(saved, this.#store.state)) continue;
+      const event = saved.envelope.payload as PrpEvent;
+      const semantic = (event.payload as Record<string, unknown>).semantic_tool as Record<string, unknown>;
+      if (!semantic || event.runId !== identity.runId || event.normalizedSessionId !== identity.normalizedSessionId) continue;
+      if (typeof semantic.callId !== "string" || typeof semantic.operationId !== "string") continue;
+      const commandId = `command_tool_${createHash("sha256").update(`${identity.runId}\0${semantic.callId}`).digest("hex").slice(0, 32)}`;
+      if (this.#pendingSemanticCalls.has(commandId)) continue;
+      const call = { callId: semantic.callId, operationId: semantic.operationId, input: semantic.input,
+        sourceEventId: event.sourceEventId, sourceEventType: event.eventType,
+        correlation: { runId: identity.runId, normalizedSessionId: identity.normalizedSessionId,
+          turnId: identity.turnId, itemId: event.itemId ?? identity.itemId } };
+      const outcome = await this.#recoverSemanticToolInput(call);
+      if (this.#identity !== identity || this.#semanticCallbacksRetired) return;
+      if (!outcome || this.getCommand(commandId)) continue;
+      const { input, ...metadata } = call;
+      this.queueCommand("semantic_tool.result", { ...metadata, inputDigest: canonicalDigest(input),
+        result: outcome.result, isError: outcome.isError === true }, commandId, true);
+      await this.flushCheckpoint();
+    }
   }
 
   get connectUrl(): string {
@@ -2011,6 +2101,9 @@ export class DurablePrpControlPlane {
       throw new CommandJournalLimitError("command_payload_too_large");
     this.#store.state.commands.push(command);
     this.#store.save();
+    // A tool can finish after the socket disconnects. Preserve its result even
+    // when no peer is currently available to trigger the wire barrier.
+    void this.flushCheckpoint().catch(() => undefined);
     if (deliverImmediately) {
       for (const connection of this.#connections) {
         if (connection.secureChannel !== null) {
@@ -2233,7 +2326,7 @@ export class DurablePrpControlPlane {
         this.#store.commit(candidate);
         connection.lease = this.#store.state.leases[transition.credentialId]!;
       }
-      connection.sendJson(
+      this.#sendJson(connection,
         this.#controlEnvelope(
           connection,
           `activation_ack_${receipt.transitionId}`,
@@ -2293,7 +2386,7 @@ export class DurablePrpControlPlane {
       this.#store.commit(candidate);
       connection.lease = this.#store.state.leases[lease.credentialId]!;
     }
-    connection.sendJson(
+    this.#sendJson(connection,
       this.#controlEnvelope(
         connection,
         `lease_renewed_${expectedExpiry}`,
@@ -2582,7 +2675,7 @@ export class DurablePrpControlPlane {
         : {}),
       requestedIdentity: structuredClone(authorization.identity),
     };
-    connection.sendJson({
+    this.#sendJson(connection, {
       protocol,
       version: selectedVersion,
       kind: "auth_challenge",
@@ -2802,7 +2895,7 @@ export class DurablePrpControlPlane {
         (this.#store.state.commandDeliveryCounts[command.commandId] ?? 0) + 1;
     }
     this.#store.save();
-    connection.sendJson({
+    this.#sendJson(connection, {
       protocol,
       version: lease.protocolVersion,
       envelopeId: `welcome_${this.#store.state.connectionCount}`,
@@ -2913,7 +3006,7 @@ export class DurablePrpControlPlane {
     this.#store.state.commandDeliveryCounts[command.commandId] =
       (this.#store.state.commandDeliveryCounts[command.commandId] ?? 0) + 1;
     this.#store.save();
-    connection.sendJson(
+    this.#sendJson(connection,
       this.#controlEnvelope(
         connection,
         `command_${command.commandId}_${this.#store.state.commandDeliveryCounts[command.commandId]}`,
@@ -3051,7 +3144,7 @@ export class DurablePrpControlPlane {
     connection: AuthorityConnection,
     receipt: DurableWarmRunTransition,
   ): void {
-    connection.sendJson(
+    this.#sendJson(connection,
       this.#controlEnvelope(
         connection,
         `command_result_ack_${receipt.controllerSeq}`,
@@ -3080,7 +3173,7 @@ export class DurablePrpControlPlane {
     if (!this.#isTerminalLifecycleCommand(command)) {
       return;
     }
-    connection.sendJson(
+    this.#sendJson(connection,
       this.#controlEnvelope(
         connection,
         `command_result_ack_${command.controllerSeq}`,
@@ -3293,6 +3386,8 @@ export class DurablePrpControlPlane {
       this.#store.state.ackedSourceSeq = sourceSeq;
     }
     this.#store.save();
+    await this.flushCheckpoint();
+    if (this.#eventOwner !== connection || this.#identity !== identity) return;
 
     if (
       isSemanticInput &&
@@ -3383,7 +3478,7 @@ export class DurablePrpControlPlane {
       }
     }
 
-    connection.sendJson(
+    this.#sendJson(connection,
       this.#controlEnvelope(
         connection,
         `ack_${this.#store.state.ackedSourceSeq}`,

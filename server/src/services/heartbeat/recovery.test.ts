@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { agents, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, environments, environmentLeases, heartbeatRuns, issueRecoveryActions, issues, nativeRunFinalizations } from "@paperclipai/db";
+import { agents, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, environments, environmentLeases, heartbeatRuns, issueRecoveryActions, issues, nativeRunFinalizations, nativeRunnerCheckpoints } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
@@ -604,6 +604,60 @@ describePostgres("heartbeat recovery module ownership", () => {
     finish();
     await Promise.all([...deps.activeRunExecutionPromises]);
     await vi.waitFor(() => expect(deps.activeRunExecutionPromises.size).toBe(0));
+  });
+
+  it("retries durable remote takeover after the previous controller lease expires", async () => {
+    const run = await seedRun();
+    const deps = callbacks(db);
+    await db.update(heartbeatRuns).set({ runtimeMode: "native", nativeIssueId: run.issueId }).where(eq(heartbeatRuns.id, run.id));
+    await db.insert(nativeRunFinalizations).values({ runId: run.id, companyId: run.companyId, issueId: run.issueId!,
+      phase: "observed", recoveryState: "awaiting_runner_reattach", leaseOwner: "prior-server",
+      leaseExpiresAt: new Date(Date.now() + 60_000) });
+    await db.insert(nativeRunnerCheckpoints).values({ runId: run.id, companyId: run.companyId, issueId: run.issueId!,
+      part: "header", material: { fixture: true } });
+    const recovery = createHeartbeatRecovery(db, deps);
+    try {
+      await recovery.reapOrphanedRuns();
+      expect(native.claims).not.toHaveBeenCalled();
+      await db.update(nativeRunFinalizations).set({ leaseExpiresAt: new Date(Date.now() - 1) }).where(eq(nativeRunFinalizations.runId, run.id));
+      const claim: NativeRestartRecoveryClaim = { kind: "bootstrap_incomplete", runId: run.id, leaseOwner: "new-server",
+        controllerGeneration: 2, providerAttempt: 0, restartKind: "hard", recoveryRequestId: null };
+      native.claims.mockResolvedValue([claim]);
+      await recovery.reapOrphanedRuns();
+      expect(native.claims).toHaveBeenCalledWith(expect.objectContaining({ runIds: [run.id] }));
+      expect(deps.executeRun).toHaveBeenCalledExactlyOnceWith(run.id, { nativeLeaseOwner: "new-server", nativeRestartRecovery: claim });
+      expect(deps.setRunStatusFromLive).not.toHaveBeenCalled();
+      await Promise.all([...deps.activeRunExecutionPromises]);
+      await db.update(heartbeatRuns).set({ status: "cancelled" }).where(eq(heartbeatRuns.id, run.id));
+      native.claims.mockClear();
+      await recovery.reapOrphanedRuns();
+      expect(native.claims).not.toHaveBeenCalled();
+    } finally {
+      await Promise.all([...deps.activeRunExecutionPromises]);
+      await db.delete(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, run.id));
+      await db.delete(heartbeatRuns).where(eq(heartbeatRuns.id, run.id));
+    }
+  });
+
+  it("does not detach a different server's native run during shutdown", async () => {
+    const run = await seedRun();
+    const deps = callbacks(db);
+    const bootId = randomUUID();
+    const expiresAt = new Date(Date.now() + 60_000);
+    await db.update(agents).set({ adapterType: "paperclip_runner" }).where(eq(agents.id, run.agentId));
+    await db.update(heartbeatRuns).set({ runtimeMode: "native", nativeIssueId: run.issueId }).where(eq(heartbeatRuns.id, run.id));
+    await db.insert(nativeRunFinalizations).values({ runId: run.id, companyId: run.companyId, issueId: run.issueId!,
+      phase: "observed", controllerBootId: bootId, leaseOwner: "other-server", leaseExpiresAt: expiresAt });
+    try {
+      await createHeartbeatRecovery(db, deps).drainRunningRunsForShutdown("SIGTERM", new Date(), [run.id]);
+      expect(native.detach).not.toHaveBeenCalled();
+      expect(deps.releaseEnvironmentLeasesForRun).not.toHaveBeenCalled();
+      expect((await db.select().from(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, run.id)))[0])
+        .toMatchObject({ controllerBootId: bootId, leaseOwner: "other-server", leaseExpiresAt: expiresAt, recoveryState: null });
+    } finally {
+      await db.delete(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, run.id));
+      await db.delete(heartbeatRuns).where(eq(heartbeatRuns.id, run.id));
+    }
   });
 
   it("does not claim or execute recovery when persisted finalization fails", async () => {

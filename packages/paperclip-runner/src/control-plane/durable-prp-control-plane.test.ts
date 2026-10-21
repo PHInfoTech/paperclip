@@ -47,6 +47,95 @@ const identity: DurableRecoveryIdentity = {
 const expectedRunnerVersion = "0.3.0";
 const expectedRunnerDigest = `sha256:${"a".repeat(64)}`;
 
+it("persists authentication and commands before the runner can observe them", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "runner-external-journal-"));
+  const core = new DurablePrpControlPlane({ stateDirectory: root, identity, expectedRunnerVersion, expectedRunnerDigest });
+  let release!: () => void;
+  let pending: Promise<void> = Promise.resolve();
+  const snapshots: unknown[] = [];
+  core.setCheckpointPersistence(async snapshot => { await pending; snapshots.push(snapshot); });
+  try {
+    await core.start();
+    const client = (await authenticate(core, core.issueBootstrapTicket()))!;
+    expect(snapshots.at(-1)).toMatchObject({ runnerVersion: expectedRunnerVersion,
+      state: { connectionCount: 1, lastLeaseId: client.welcome.connectionLeaseId } });
+    pending = new Promise<void>(resolveCommit => { release = resolveCommit; });
+    core.queueCommand("session.snapshot", {}, "checkpoint-command", true);
+    let received = false;
+    const command = receiveSecure(client).then(value => { received = true; return value; });
+    await new Promise<void>(resolveTurn => setImmediate(resolveTurn));
+    expect(received).toBe(false);
+    release();
+    expect(await command).toMatchObject({ kind: "command", payload: { commandId: "checkpoint-command" } });
+    expect(snapshots.at(-1)).toMatchObject({ state: { commands: [expect.objectContaining({ commandId: "checkpoint-command" })] } });
+    client.socket.destroy();
+  } finally {
+    release?.();
+    await core.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("does not dispatch a semantic effect when external journal persistence fails", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "runner-external-journal-failure-"));
+  const dispatch = vi.fn(async () => ({ result: "written" }));
+  const core = new DurablePrpControlPlane({ stateDirectory: root, identity, expectedRunnerVersion,
+    expectedRunnerDigest, onSemanticToolInput: dispatch });
+  core.setCheckpointPersistence(async snapshot => {
+    if (snapshot.state.ackedSourceSeq > 0) throw new Error("database unavailable");
+  });
+  try {
+    await core.start();
+    const client = (await authenticate(core, core.issueBootstrapTicket()))!;
+    sendSecure(client, semanticInputEvent());
+    await vi.waitFor(() => expect(core.activeRunnerConnectionCount()).toBe(0));
+    expect(dispatch).not.toHaveBeenCalled();
+    await expect(core.flushCheckpoint()).rejects.toThrow("database unavailable");
+    client.socket.destroy();
+  } finally {
+    await core.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it.each([true, false])("reconciles a saved semantic input only from an authoritative outcome (known=%s)", async known => {
+  const root = mkdtempSync(resolve(tmpdir(), "runner-recovered-semantic-"));
+  const dispatch = vi.fn(() => new Promise<{ result: unknown }>(() => undefined));
+  const options = { stateDirectory: root, identity, expectedRunnerVersion, expectedRunnerDigest };
+  const first = new DurablePrpControlPlane({ ...options, onSemanticToolInput: dispatch });
+  let recovered: DurablePrpControlPlane | undefined;
+  try {
+    await first.start();
+    const client = (await authenticate(first, first.issueBootstrapTicket()))!;
+    sendSecure(client, semanticInputEvent());
+    expect((await receiveSecure(client))!.kind).toBe("ack");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await first.stop();
+    const recovery = vi.fn(async () => known ? { result: { savedReceipt: "exact-effect" } } : null);
+    const redispatch = vi.fn(async () => ({ result: "must not execute again" }));
+    recovered = new DurablePrpControlPlane({ ...options, onSemanticToolInput: redispatch,
+      recoverSemanticToolInput: recovery });
+    await recovered.start();
+    const next = (await authenticate(recovered, client.leaseToken!))!;
+    await recovered.recoverPendingSemanticInputs();
+    expect(recovery).toHaveBeenCalledTimes(1);
+    expect(redispatch).not.toHaveBeenCalled();
+    if (known) {
+      expect(await receiveSecure(next)).toMatchObject({ kind: "command", payload: {
+        type: "semantic_tool.result", payload: { result: { savedReceipt: "exact-effect" } },
+      } });
+    } else {
+      expect(recovered.store.state.commands).toHaveLength(0);
+      expect(recovered.semanticToolResultsSettled()).toBe(false);
+    }
+    next.socket.destroy();
+  } finally {
+    await recovered?.stop();
+    await first.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("commits credential updates before ACK and preserves replay identity", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "runner-credential-update-"));
   let release!: () => void;

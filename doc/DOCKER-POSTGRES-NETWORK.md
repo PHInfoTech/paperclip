@@ -14,6 +14,7 @@ for the general Docker guide.
 | `docker/docker-compose.yml` | Base stack: the `db` (PostgreSQL 17) and `server` (Paperclip) services, built from the `production` Dockerfile target |
 | `docker/docker-compose.network.yml` | Override merged on top of the base: attaches both services to `paperclip-net`, removes PostgreSQL's host port, builds the `production-hermes` target and connects OpenCode and Hermes to Switchyard (see [Local models through Switchyard](#local-models-through-switchyard)) |
 | `docker/hermes/config.yaml` | Hermes Agent provider configuration, copied into the container on start |
+| `docker/switchyard-loopback.cjs` | Forwards `127.0.0.1:4000` in the server container to Switchyard, for Local endpoint connections |
 | `docker/.env` | Signing secrets read by Compose (not committed, see below) |
 
 Compose merges the files in the order given by `-f`. Pass both files and the
@@ -159,6 +160,40 @@ ownership of that tree on start and exits when it cannot change a file.
 
 To upgrade Hermes, change `HERMES_AGENT_VERSION` in the Dockerfile's
 `production-hermes` stage and rebuild with `up -d --build`.
+
+### Local endpoint AI connection (recommended for new agents)
+
+Paperclip's new-agent screen attaches an **AI connection** to OpenCode and
+Hermes agents. Its default is an OpenRouter account, which only accepts
+`openrouter/…` models, so pick a **Local endpoint** connection for Switchyard
+instead. A local endpoint must use a loopback address, so the server command
+also starts `docker/switchyard-loopback.cjs`, which forwards `127.0.0.1:4000`
+inside the server container to Switchyard on the host. It restarts with the
+server.
+
+Create the connection from the agent's **Connection** field → connect →
+**Local endpoint**:
+
+| Field | Value |
+|-------|-------|
+| Provider URL | `http://localhost:4000/v1` |
+| API format | Chat Completions · OpenCode, Hermes |
+| Authentication | No authentication |
+| Model IDs | the full `switchyard/…` ids, comma separated, e.g. `switchyard/deepseek-flash-qwen38, switchyard/qwen38, switchyard/ultra-qwen38` (`curl http://localhost:4000/v1/models` lists all) |
+
+Then choose a model on the agent. With this connection Paperclip writes its own
+provider config for each run (OpenCode provider `paperclip`, or a Hermes
+`custom` provider), so the server-wide OpenCode provider and
+`docker/hermes/config.yaml` below are not used for that agent.
+
+Check the forwarder from inside the container:
+
+```sh
+pc-compose exec -u node server curl -s http://localhost:4000/v1/models
+```
+
+The "Custom gateway" connection type does not fit: it requires HTTPS for any
+address other than localhost.
 
 ### Other harnesses
 

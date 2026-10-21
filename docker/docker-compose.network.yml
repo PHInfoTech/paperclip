@@ -21,12 +21,14 @@ services:
       # Mounted outside /paperclip: the entrypoint repairs ownership of that tree
       # and fails on a read-only file inside it.
       - ./hermes/config.yaml:/etc/paperclip/hermes/config.yaml:ro
-    # Copy the Hermes config into place on every start (as `node`, after the
-    # entrypoint's ownership repair), then run the image's normal server command.
+      - ./switchyard-loopback.cjs:/etc/paperclip/switchyard-loopback.cjs:ro
+    # On every start (as `node`, after the entrypoint's ownership repair): start
+    # the Switchyard loopback forwarder for "Local endpoint" AI connections, copy
+    # the Hermes config into place, then run the image's normal server command.
     command:
       - sh
       - -c
-      - mkdir -p /paperclip/.hermes && cp /etc/paperclip/hermes/config.yaml /paperclip/.hermes/config.yaml && exec node server/dist-runtime/index.mjs
+      - node /etc/paperclip/switchyard-loopback.cjs & mkdir -p /paperclip/.hermes && cp /etc/paperclip/hermes/config.yaml /paperclip/.hermes/config.yaml && exec node server/dist-runtime/index.mjs
     # Reach services published on the host (Switchyard, vLLM) from the container.
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -73,6 +75,7 @@ services:
         }
     networks:
       - paperclip-net
+
 
 networks:
   paperclip-net:

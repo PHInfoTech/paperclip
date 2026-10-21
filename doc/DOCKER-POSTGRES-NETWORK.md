@@ -12,7 +12,8 @@ for the general Docker guide.
 | File | Role |
 |------|------|
 | `docker/docker-compose.yml` | Base stack: the `db` (PostgreSQL 17) and `server` (Paperclip) services, built from the `production` Dockerfile target |
-| `docker/docker-compose.network.yml` | Override merged on top of the base: attaches both services to `paperclip-net` and removes PostgreSQL's host port |
+| `docker/docker-compose.network.yml` | Override merged on top of the base: attaches both services to `paperclip-net`, removes PostgreSQL's host port, builds the `production-hermes` target and connects OpenCode and Hermes to Switchyard (see [Local models through Switchyard](#local-models-through-switchyard)) |
+| `docker/hermes/config.yaml` | Hermes Agent provider configuration, copied into the container on start |
 | `docker/.env` | Signing secrets read by Compose (not committed, see below) |
 
 Compose merges the files in the order given by `-f`. Pass both files and the

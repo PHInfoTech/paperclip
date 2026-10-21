@@ -59,8 +59,9 @@ node /tmp/paperclip-notebook-publish.mjs ./dist \
 Build client applications before publishing. Use `--entry-file` and `--spa`
 when needed. Updates require `--page-id` and `--expected-version`. The script
 reads only the selected local source under the shell's existing filesystem
-authority. It rejects symbolic links, nonregular files, noncanonical paths,
-changed content, and advertised size/file limits before publication mutations.
+authority. It rejects symbolic links, nonregular files, noncanonical paths, and advertised
+size/file limits before publication mutations, then verifies declared content
+again before sending chunks.
 Agents without those shell credentials or filesystem access use the ordinary
 MCP tools available to their runtime; the script grants neither authority.
 

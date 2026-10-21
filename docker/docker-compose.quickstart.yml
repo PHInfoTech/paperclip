@@ -13,6 +13,10 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      # Compose builds the Dockerfile's last stage (`cloud`) without a target.
+      # Its nested server/node_modules/.pnpm fails the runner's ACPX
+      # provider package-root check, so build the standard image.
+      target: production
     # Ceiling on processes. The image makes tini PID 1 so orphaned agent
     # descendants are reaped instead of piling up as zombies; this is the
     # backstop if something leaks anyway — the container hits its own limit and

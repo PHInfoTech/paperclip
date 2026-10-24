@@ -1287,6 +1287,34 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     expect(await service.credential(row)).toBe("");
   });
 
+  it("lists a custom endpoint's models with its own credential and refuses other connections", async () => {
+    const gateway = await service.save(companyId, "alice", { provider: "openai", method: "api_key", name: "Listed gateway", ownership: "personal", allAgents: true, agentIds: [],
+      routing: { kind: "gateway", protocol: "chat", auth: "bearer", baseUrl: "https://gateway.example/v1/", models: [] } }, "gateway-list-secret");
+    const local = await service.save(companyId, "alice", { provider: "openai", method: "api_key", name: "Listed local", ownership: "personal", allAgents: true, agentIds: [],
+      routing: { kind: "local", protocol: "chat", auth: "none", baseUrl: "http://localhost:4000/v1", models: [] } }, "");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ object: "list",
+      data: [{ id: "switchyard/qwen38" }, { id: "claude-x", display_name: "Claude X" }, { id: "switchyard/qwen38" }, { id: 7 }, null] })));
+    try {
+      expect(await service.listModels(companyId, "alice", gateway.connectionId, gateway.grantId)).toEqual([
+        { id: "switchyard/qwen38", label: "switchyard/qwen38" }, { id: "claude-x", label: "Claude X" }]);
+      expect(fetchSpy).toHaveBeenLastCalledWith("https://gateway.example/v1/models", expect.objectContaining({
+        redirect: "error", headers: expect.objectContaining({ Authorization: "Bearer gateway-list-secret" }) }));
+      await service.listModels(companyId, "alice", local.connectionId);
+      expect(fetchSpy).toHaveBeenLastCalledWith("http://localhost:4000/v1/models", expect.objectContaining({ headers: { Accept: "application/json" } }));
+      fetchSpy.mockClear();
+      await expect(service.listModels(companyId, "bob", gateway.connectionId)).rejects.toThrow("not found");
+      const owner = "model-list-owner";
+      await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" });
+      const apiAccount = await create(owner, "Not an endpoint");
+      await expect(service.listModels(companyId, owner, apiAccount.connectionId)).rejects.toThrow("Only custom gateway and local endpoint");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+      await expect(service.listModels(companyId, "alice", local.connectionId)).rejects.toThrow("Could not list models");
+      fetchSpy.mockRejectedValueOnce(new Error("connection refused"));
+      await expect(service.listModels(companyId, "alice", local.connectionId)).rejects.toThrow("Could not list models");
+    } finally { fetchSpy.mockRestore(); }
+  });
+
   it.each([
     ["anthropic", false], ["openai", false], ["anthropic", true], ["openai", true],
   ] as const)("turns a %s auth failure into one card and resumes after repair (switch method: %s)", async (provider, switchMethod) => {

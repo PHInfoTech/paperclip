@@ -8,7 +8,7 @@ import { aiConnectionsApi } from "@/api/ai-connections";
 import { agentsApi } from "@/api/agents";
 import { useConnectionModels } from "./useConnectionModels";
 
-vi.mock("@/api/ai-connections", () => ({ aiConnectionsApi: { list: vi.fn() } }));
+vi.mock("@/api/ai-connections", () => ({ aiConnectionsApi: { list: vi.fn(), models: vi.fn() } }));
 vi.mock("@/api/agents", () => ({ agentsApi: { adapterModels: vi.fn() } }));
 
 const binding: AiConnectionBinding = { provider: "openrouter", method: "api_key", mode: "shared", connectionId: "router", grantId: "grant" };
@@ -73,10 +73,36 @@ it("does not reuse public OpenRouter models after switching to a custom gateway"
   const gateway: AiManagedConnectionSummary = { ...account, id: "gateway", grantId: "gateway-grant", provider: "openai", routing: { kind: "gateway", protocol: "chat", auth: "bearer", baseUrl: "https://example.com/v1", models: [] } };
   await mount([account, gateway]);
   await vi.waitFor(() => expect(result?.models).toEqual(catalog));
+  vi.mocked(aiConnectionsApi.models).mockResolvedValue([{ id: "private-model", label: "private-model" }]);
   await render({ provider: "openai", method: "api_key", mode: "shared", connectionId: gateway.id, grantId: gateway.grantId });
-  expect(result?.models).toEqual([]);
+  await vi.waitFor(() => expect(result?.models).toEqual([{ id: "paperclip/private-model", label: "private-model" }]));
+  expect(aiConnectionsApi.models).toHaveBeenCalledWith("company", "gateway", "gateway-grant");
   expect(result?.resolveModel("private-model")).toBe("paperclip/private-model");
-  expect(result?.refreshModels).toBeUndefined();
+});
+
+const local: AiManagedConnectionSummary = { ...account, id: "local", grantId: "local-grant", provider: "openai",
+  routing: { kind: "local", protocol: "chat", auth: "none", baseUrl: "http://localhost:4000/v1", models: [{ id: "saved/model" }] } };
+const localBinding: AiConnectionBinding = { provider: "openai", method: "api_key", mode: "shared", connectionId: "local", grantId: "local-grant" };
+
+it.each(["opencode_local", "hermes_local"])("lists a local endpoint's own models after its saved IDs for %s", async harness => {
+  vi.mocked(aiConnectionsApi.models).mockResolvedValue([{ id: "served/one", label: "served/one" }, { id: "saved/model", label: "Saved model" }]);
+  await mount([local], harness, localBinding);
+  const prefix = harness === "opencode_local" ? "paperclip/" : "";
+  await vi.waitFor(() => expect(result?.models.map(m => m.id)).toEqual([`${prefix}saved/model`, `${prefix}served/one`]));
+  expect(agentsApi.adapterModels).not.toHaveBeenCalled();
+  expect(result?.refreshModels).toBeDefined();
+});
+
+it("keeps saved local endpoint IDs without an error when the endpoint cannot list models", async () => {
+  vi.mocked(aiConnectionsApi.models).mockRejectedValue(new Error("unreachable"));
+  await mount([local], "hermes_local", localBinding);
+  await vi.waitFor(() => expect(aiConnectionsApi.models).toHaveBeenCalled());
+  await vi.waitFor(() => expect(result?.isLoading).toBe(false));
+  expect(result?.models).toEqual([{ id: "saved/model", label: "saved/model" }]);
+  expect(result?.error).toBeNull();
+  await act(async () => root.unmount());
+  await mount([{ ...local, routing: { ...local.routing!, models: [] } }], "hermes_local", localBinding);
+  await vi.waitFor(() => expect(result?.error).toBeInstanceOf(Error));
 });
 
 it("leaves native model discovery alone", async () => {

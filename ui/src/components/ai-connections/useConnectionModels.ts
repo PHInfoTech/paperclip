@@ -32,22 +32,35 @@ export function useConnectionModels(
     staleTime: 60_000,
     retry: false,
   });
+  // Custom gateways and local endpoints list their own models; saved IDs come first.
+  const endpoint = routing?.kind === "gateway" || routing?.kind === "local";
+  const listed = useQuery({
+    queryKey: ["ai-connections", companyId, "models", connection?.id, connection?.grantId],
+    queryFn: () => aiConnectionsApi.models(companyId!, connection!.id, connection!.grantId),
+    enabled: Boolean(companyId && connection && endpoint),
+    staleTime: 60_000,
+    retry: false,
+  });
   const effectiveRouting: AiProviderRouting | undefined = routing ?? (openRouter
     ? { kind: "openrouter", protocol: "chat", auth: "bearer", models: [] }
     : undefined);
   const modelOptions = discover
     ? (catalog.data ?? []).map((m) => ({ ...m, id: harness === "opencode_local" ? m.id : m.id.replace(/^openrouter\//, "") }))
-    : routing?.models ?? [];
+    : endpoint
+      ? [...new Map([...routing.models, ...(listed.data ?? [])].map((m) => [m.id, m])).values()]
+      : routing?.models ?? [];
+  const query = discover ? catalog : endpoint ? listed : undefined;
   return effectiveRouting
     ? {
         models: modelOptions.map((m) => ({
           id: aiRoutingModel(effectiveRouting, harness, m.id),
           label: m.label ?? m.id,
         })),
-        isLoading: discover && catalog.isLoading,
-        error: discover ? catalog.error : null,
-        refreshing: discover && catalog.isFetching,
-        refreshModels: discover ? async () => { await catalog.refetch(); } : undefined,
+        isLoading: Boolean(query?.isLoading),
+        // Saved IDs still work when the endpoint cannot list its models.
+        error: query && (discover || !routing?.models.length) ? query.error : null,
+        refreshing: Boolean(query?.isFetching),
+        refreshModels: query ? async () => { await query.refetch(); } : undefined,
         resolveModel: (model: string) =>
           aiRoutingModel(effectiveRouting, harness, model),
       }

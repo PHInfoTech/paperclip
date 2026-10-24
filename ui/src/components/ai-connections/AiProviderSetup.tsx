@@ -246,7 +246,8 @@ export function AiProviderSetup({
       />
       <span className="block">
         Use the provider’s model ID or your gateway’s alias. You can
-        also enter one on the agent.
+        also enter one on the agent. Custom gateways and local endpoints
+        also offer the models their server lists.
       </span>
     </label>
   );

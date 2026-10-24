@@ -45,6 +45,7 @@ import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
 import { secretService } from "./secrets.js";
 import { probeAiConnectionUsage } from "./ai-connection-usage.js";
+import { listRoutedModels, type AiRoutedModel } from "./ai-connection-models.js";
 
 /** Same human audience displayed by the existing Connections identity controls. */
 function canUseCredential(
@@ -222,14 +223,17 @@ export function aiConnectionService(db: Db) {
     });
   }
   /** On-demand account observation for either runner; never probes ambient CLI auth. */
-  async function probeUsage(companyId: string, userId: string, connectionId: string, grantId?: string): Promise<AiConnectionUsage> {
+  async function visibleGrant(companyId: string, userId: string, connectionId: string, grantId: string | undefined, purpose: string) {
     if (!(await membership(companyId, userId))) throw forbidden("An active company member is required");
     const candidates = (await rows(companyId)).filter((row) => row.connection.id === connectionId && (!grantId || row.grant.id === grantId));
     const audience = await db.select().from(connectionGrantMembers).where(eq(connectionGrantMembers.companyId, companyId));
     const visible = candidates.filter(({ grant }) => canUseCredential(grant, userId, audience.filter((member) => member.grantId === grant.id)));
     if (!visible.length) throw notFound("AI connection not found");
-    if (visible.length > 1) throw unprocessable("Choose a credential grant for this usage check");
-    const row = visible[0]!;
+    if (visible.length > 1) throw unprocessable(`Choose a credential grant for this ${purpose}`);
+    return visible[0]!;
+  }
+  async function probeUsage(companyId: string, userId: string, connectionId: string, grantId?: string): Promise<AiConnectionUsage> {
+    const row = await visibleGrant(companyId, userId, connectionId, grantId, "usage check");
     const metadata = aiConnectionMetadataSchema.safeParse(row.connection.config.ai);
     if (!metadata.success) throw notFound("AI connection not found");
     const identity = { connectionId: row.connection.id, grantId: row.grant.id, ...metadata.data };
@@ -243,6 +247,18 @@ export function aiConnectionService(db: Db) {
     }
     const value = await credential(row);
     return { ...identity, ...await probeAiConnectionUsage(metadata.data, value) };
+  }
+  /** Lists the models a custom endpoint serves, so agents can pick one instead of typing it. */
+  async function listModels(companyId: string, userId: string, connectionId: string, grantId?: string): Promise<AiRoutedModel[]> {
+    const row = await visibleGrant(companyId, userId, connectionId, grantId, "model list");
+    const metadata = aiConnectionMetadataSchema.safeParse(row.connection.config.ai);
+    if (!metadata.success) throw notFound("AI connection not found");
+    const routing = metadata.data.routing;
+    if (routing?.kind !== "local" && routing?.kind !== "gateway")
+      throw unprocessable("Only custom gateway and local endpoint connections list their models");
+    if (row.grant.status !== "active" || !row.connection.enabled || row.connection.status !== "active")
+      throw unprocessable("Reconnect or enable this AI connection before listing its models");
+    return listRoutedModels(routing, await credential(row));
   }
   async function select(input: {
     companyId: string;
@@ -1161,5 +1177,5 @@ export function aiConnectionService(db: Db) {
       return [{ ...row, summary }];
     });
   }
-  return { list, selectDecision, selectFastResponse, selectPromptInjectionPrevention, quotaAccounts, subscriptionAccounts: (companyId: string, userId: string) => quotaAccounts(companyId, userId, true), refreshQuotaCredential, select, credential, runtimeCredential, probeUsage, save, setDefault, membership, markAuthenticationFailed };
+  return { list, selectDecision, selectFastResponse, selectPromptInjectionPrevention, quotaAccounts, subscriptionAccounts: (companyId: string, userId: string) => quotaAccounts(companyId, userId, true), refreshQuotaCredential, select, credential, runtimeCredential, probeUsage, listModels, save, setDefault, membership, markAuthenticationFailed };
 }

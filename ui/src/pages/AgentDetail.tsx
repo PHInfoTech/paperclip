@@ -2124,7 +2124,7 @@ export function ConfigurationTab({
         hideInstructionsFile={hideInstructionsFile}
         content={content === "runtime" ? "configuration" : "secrets"}
         sectionLayout="cards"
-        environmentVariablesPlacement="configuration"
+        environmentVariablesPlacement={content === "secrets" ? "secrets" : "configuration"}
         compactTestFeedback
         sectionOrder={["identity", "adapter", "configuration", "environment", "environment-variables", "run-policy"]}
         sectionTitles={{ adapter: "Adapter", configuration: "Configuration", identity: "Agent identity" }}

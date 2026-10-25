@@ -28,15 +28,19 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async (importOriginal) => {
 });
 
 // Mock fs and path resolution to avoid real file reads in execute()
-vi.mock("node:fs/promises", () => ({
-  readFile: vi.fn(async () => ""),
-  writeFile: vi.fn(async () => undefined),
-  mkdir: vi.fn(async () => undefined),
-  rm: vi.fn(async () => undefined),
-  access: vi.fn(async () => undefined),
-  readdir: vi.fn(async () => []),
-  stat: vi.fn(async () => ({ isFile: () => true, isDirectory: () => false })),
-}));
+vi.mock("node:fs/promises", () => {
+  const mocked = {
+    readFile: vi.fn(async () => ""),
+    writeFile: vi.fn(async () => undefined),
+    mkdir: vi.fn(async () => undefined),
+    chmod: vi.fn(async () => undefined),
+    rm: vi.fn(async () => undefined),
+    access: vi.fn(async () => undefined),
+    readdir: vi.fn(async () => []),
+    stat: vi.fn(async () => ({ isFile: () => true, isDirectory: () => false })),
+  };
+  return { ...mocked, default: mocked };
+});
 
 import { execute } from "./execute.js";
 import * as serverUtils from "@paperclipai/adapter-utils/server-utils";
@@ -123,6 +127,27 @@ describe("hermes-local adapter onSpawn forwarding", () => {
     const { ctx } = makeCtx({ cwd: "/private/qa/configured-workspace" });
     await execute({ ...ctx, context: { ...ctx.context, paperclipWorkspace: { cwd: "/private/qa/agent-workspace" } } } as any);
     expect(vi.mocked(serverUtils.runChildProcess).mock.calls.at(-1)![3].cwd).toBe("/private/qa/configured-workspace");
+  });
+
+  it("writes the run's Paperclip MCP servers into the managed Hermes config", async () => {
+    const fs = await import("node:fs/promises");
+    const { ctx } = makeCtx({
+      managedAiConnection: { method: "api_key" },
+      env: { HERMES_HOME: "/tmp/managed-home/provider" },
+    });
+    await execute({
+      ...ctx,
+      runtimeMcp: {
+        getServers: () => [
+          { name: "paperclip-assigned", url: "http://localhost:3100/mcp/gateways/gw_1", token: "run-token", connectionId: "assignment:1" },
+        ],
+      },
+    } as any);
+
+    const write = vi.mocked(fs.writeFile).mock.calls.find(([file]) => file === "/tmp/managed-home/provider/config.yaml");
+    expect(write?.[1]).toContain('"paperclip_assigned":');
+    expect(write?.[1]).toContain('Authorization: "Bearer run-token"');
+    expect(vi.mocked(serverUtils.runChildProcess).mock.calls.at(-1)![3].env.HERMES_HOME).toBe("/tmp/managed-home/provider");
   });
 
   it("runChildProcess opts type includes onSpawn", () => {

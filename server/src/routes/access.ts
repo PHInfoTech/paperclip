@@ -2272,7 +2272,12 @@ export function resolveJoinRequestAgentManagerId(
   const ceoCandidates = candidates.filter(
     (candidate) => candidate.role === "ceo"
   );
-  if (ceoCandidates.length === 0) return null;
+  if (ceoCandidates.length === 0) {
+    // No agent carries the "ceo" role (e.g. the top agent was created as
+    // "general"). Fall back to the company's single top-level agent.
+    const roots = candidates.filter((candidate) => candidate.reportsTo === null);
+    return roots.length === 1 ? roots[0].id : null;
+  }
   const rootCeo = ceoCandidates.find(
     (candidate) => candidate.reportsTo === null
   );
@@ -4225,7 +4230,7 @@ export function accessRoutes(
         const managerId = resolveJoinRequestAgentManagerId(existingAgents);
         if (!managerId) {
           throw conflict(
-            "Join request cannot be approved because this company has no active CEO"
+            "Join request cannot be approved because this company has no active CEO or single top-level agent"
           );
         }
 

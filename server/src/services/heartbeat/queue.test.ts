@@ -218,6 +218,23 @@ describe.skipIf(!support.supported)("heartbeat queue database wiring", () => {
     expect(current.executionRunId).toBe(newOwner.id);
   });
 
+  it("leaves a queued run queued when another open execution of its routine holds the issue lock", async () => {
+    const { run, issue, agent, company } = await fixture("queued");
+    const origin = { originKind: "routine_execution", originId: "routine-1", originFingerprint: "same-fingerprint" };
+    await db.update(issues).set({ ...origin, executionRunId: null, executionAgentNameKey: null, executionLockedAt: null })
+      .where(eq(issues.id, issue.id));
+    const [holder] = await db.insert(heartbeatRuns).values({ companyId: company.id, agentId: agent.id, status: "running", invocationSource: "assignment" }).returning();
+    await db.insert(issues).values({ companyId: company.id, title: "Routine holder", status: "blocked", assigneeAgentId: agent.id,
+      ...origin, executionRunId: holder.id, executionAgentNameKey: agent.name, executionLockedAt: new Date() });
+    await db.update(heartbeatRuns).set({ responsibleUserId: "queue-test-user" }).where(eq(heartbeatRuns.id, run.id));
+    const deps = callbacks(db);
+    deps.getAgent.mockResolvedValue(agent);
+    const queue = createHeartbeatQueue(db, deps);
+    expect(await queue.claimQueuedRun({ ...run, responsibleUserId: "queue-test-user" })).toBeNull();
+    expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run.id)))[0]).toMatchObject({ status: "queued", startedAt: null });
+    expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0].executionRunId).toBeNull();
+  });
+
   it.each(["running", "failed"])("resumes the %s native owner before promoting its queued waiter", async status => {
     const { run, issue, agent, company } = await fixture(status);
     await db.update(heartbeatRuns).set({ runtimeMode: "native", nativeIssueId: issue.id, runnerProfileJson: {

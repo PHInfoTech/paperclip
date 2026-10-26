@@ -98,6 +98,7 @@ import {
   HttpError,
   notFound,
 } from "../../errors.js";
+import { isUniqueViolation } from "../../db-errors.js";
 import { logger } from "../../middleware/logger.js";
 import { publishLiveEvent } from "../live-events.js";
 import { allocateHeartbeatRunEventSeq } from "../heartbeat-run-events.js";
@@ -220,6 +221,8 @@ const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = AGENT_DEFAULT_MAX_CONCURRENT_RUNS;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MIN = 1;
 
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 50;
+
+const OPEN_ROUTINE_EXECUTION_CONSTRAINT = "issues_open_routine_execution_uq";
 
 export const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 
@@ -1228,6 +1231,18 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       }
       return { ownsIssue, blocked: false };
     }
+    // Another open execution of the same routine already holds the issue
+    // execution lock. Admission treats that like any other blocked claim: the
+    // run stays queued instead of failing startup or the scheduler tick.
+    function isOpenRoutineExecutionConflict(error: unknown) {
+      return isUniqueViolation(error, OPEN_ROUTINE_EXECUTION_CONSTRAINT);
+    }
+    function logOpenRoutineExecutionConflict(error: unknown) {
+      logger.warn(
+        { err: error, runId: run.id, agentId: run.agentId, issueId },
+        "queued run left queued: an open execution of the same routine already holds the issue lock",
+      );
+    }
     async function bindClaimedIssueExecution(tx: Db, ownsIssue: boolean, claimedRun: typeof heartbeatRuns.$inferSelect | null | undefined) {
       if (!claimedRun || !issueId || !ownsIssue) return;
       await tx.update(issues).set({
@@ -1522,6 +1537,10 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             .catch((error) => {
               if (isExternalChatWaitAuthorizationContention(error))
                 return { kind: "stale" as const, run: null };
+              if (isOpenRoutineExecutionConflict(error)) {
+                logOpenRoutineExecutionConflict(error);
+                return { kind: "stale" as const, run: null };
+              }
               throw error;
             })
         : null;
@@ -1597,6 +1616,11 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             await bindClaimedIssueExecution(claimTx as unknown as Db, issueClaim.ownsIssue, claimedRun);
             return claimedRun;
           });
+        }).catch((error) => {
+          // The whole claim rolled back, so the run stays queued.
+          if (!isOpenRoutineExecutionConflict(error)) throw error;
+          logOpenRoutineExecutionConflict(error);
+          return null;
         });
     if (!claimed) return null;
 
@@ -1661,7 +1685,11 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
               eq(issues.executionRunId, claimed.id),
             ),
           ),
-        );
+        )
+        .catch((error) => {
+          if (!isOpenRoutineExecutionConflict(error)) throw error;
+          logOpenRoutineExecutionConflict(error);
+        });
     }
 
     return claimed;

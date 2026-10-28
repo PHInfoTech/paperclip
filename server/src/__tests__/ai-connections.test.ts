@@ -1256,6 +1256,21 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     }
   });
 
+  it("makes a provider application visible again when a new connection reuses an archived one", async () => {
+    const routing = { kind: "gateway", protocol: "chat", auth: "bearer", baseUrl: "https://archived-app.example/v1", models: [{ id: "archived-app-model" }] } as const;
+    const input = { provider: "openai", method: "api_key", ownership: "shared", allAgents: true, agentIds: [], routing: { ...routing, models: [...routing.models] } } as const;
+    const first = await service.save(companyId, "alice", { ...input, name: "Archived app first", routing: { ...input.routing } }, "first-credential");
+    const [firstStored] = await db.select().from(toolConnections).where(eq(toolConnections.id, first.connectionId));
+    // Archiving the last connection of a provider archives its application too.
+    await db.update(toolApplications).set({ status: "archived" }).where(eq(toolApplications.id, firstStored!.applicationId));
+    const second = await service.save(companyId, "alice", { ...input, name: "Archived app second", routing: { ...input.routing } }, "second-credential");
+    const [secondStored] = await db.select().from(toolConnections).where(eq(toolConnections.id, second.connectionId));
+    expect(secondStored!.applicationId).toBe(firstStored!.applicationId);
+    const [application] = await db.select().from(toolApplications).where(eq(toolApplications.id, secondStored!.applicationId));
+    // The Apps list only shows connections under active applications.
+    expect(application!.status).toBe("active");
+  });
+
   it("reconnects JSONB routing without changing its identity or access", async () => {
     const routing = { kind: "gateway", protocol: "responses", auth: "bearer", baseUrl: "https://gateway.example/v1", models: [{ id: "gateway-model" }] } as const;
     const input = { provider: "openai", method: "api_key", name: "Reconnect gateway", ownership: "personal", allAgents: false, agentIds: [agentId], routing: { ...routing, models: [...routing.models] } } as const;

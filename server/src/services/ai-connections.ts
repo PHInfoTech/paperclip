@@ -776,6 +776,13 @@ export function aiConnectionService(db: Db) {
           ),
         );
       if (!app) throw unprocessable("Could not find the provider application");
+      // Archiving a provider's last connection archives its application. A new connection reuses that
+      // row, and the Apps list only shows connections under active applications.
+      if (app.status === "archived")
+        await tx
+          .update(toolApplications)
+          .set({ status: "active", updatedAt: new Date() })
+          .where(eq(toolApplications.id, app.id));
       if (reconnect)
         await tx
           .update(toolConnections)

@@ -78,6 +78,32 @@ intents retain their existing callback protocol. Standalone dialogs verify the s
 connection through the API after the sign-in popup returns to the instance. Project
 name and repository drafts stay mounted across setup and cancellation.
 
+## Other Git hosts (GitLab, Bitbucket, self-hosted)
+
+A project can use a repository from any Git host without a catalog connection.
+In the project's Configuration, **Repositories → Git repository by URL** saves the
+address on the project's primary workspace (`repoUrl`, `sourceType: git_repo`).
+When the project already has a primary workspace, the URL is attached to it and
+its local folder is kept; otherwise a primary workspace named after the repository
+is created. The same fields are available through the project workspace API.
+
+- Accepted values are `ssh://`, `https://`, `http://` and `git://` URLs, plus
+  SCP-style remotes (`git@gitlab.com:group/repo.git`). The shared schema
+  (`normalizeGitRemoteUrl` in `packages/shared/src/git-remote-url.ts`) rewrites an
+  SCP-style remote to `ssh://git@gitlab.com/group/repo.git` on create and update.
+  Local paths are rejected here; use the local folder field for those.
+- Such a workspace has no `metadata.githubRepositoryId`. It is not part of the
+  GitHub picker, and Paperclip does not check provider permissions for it.
+- The managed checkout runs `git clone` as the server's OS user. Paperclip injects
+  tokens only for `https://github.com` remotes, so other hosts use that user's own
+  credentials: an SSH key in `~/.ssh` (use the `ssh://` form) or a configured
+  credential helper. A clone that cannot authenticate fails with the normal git
+  connection error.
+- Agents receive the address as `PAPERCLIP_WORKSPACE_REPO_URL` and can use the
+  host's CLI (`glab` for GitLab) alongside `git`.
+- Editing or clearing the URL later happens on the same screen
+  (`LegacyProjectRepository.tsx`, labelled "Repository URL").
+
 ## UI review and verification
 
 `Proposals/Project repos` contains the reviewed states, including loading, failure,
@@ -88,7 +114,8 @@ properties through an explicit repositories slot. Story setup and saves use fixt
 - Shared visual control: `ui/src/components/RepositoryEditor.tsx`.
 - Data and error handling: `ProjectRepositoryInput.tsx`.
 - Configuration persistence and legacy editing: `ProjectRepositories.tsx` and
-  `LegacyProjectRepository.tsx`.
+  `LegacyProjectRepository.tsx`; adding a non-GitHub repository by URL:
+  `ProjectGitRepository.tsx`.
 - Production dialog: `NewProjectDialog.tsx`.
 - Server tests: `project-repositories.test.ts` and
   `project-repositories-persistence.test.ts`.

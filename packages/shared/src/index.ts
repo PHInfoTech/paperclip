@@ -2835,3 +2835,4 @@ export * from "./agent-observability.js";
 export * from "./prompt-injection-prevention.js";
 
 export * from "./workspace-provider.js";
+export * from "./git-remote-url.js";

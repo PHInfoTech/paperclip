@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeGitRemoteUrl } from "../git-remote-url.js";
 import { PROJECT_STATUSES, PROJECT_ICON_NAMES } from "../constants.js";
 import { envConfigSchema } from "./secret.js";
 import { trustAuthorizationPolicySchema } from "./trust-policy.js";
@@ -53,7 +54,8 @@ const projectWorkspaceFields = {
   name: z.string().min(1).optional(),
   sourceType: projectWorkspaceSourceTypeSchema.optional(),
   cwd: z.string().min(1).optional().nullable(),
-  repoUrl: z.string().url().optional().nullable(),
+  // SCP-style remotes (git@gitlab.com:group/repo.git) are normalized to ssh:// before validation.
+  repoUrl: z.string().transform(normalizeGitRemoteUrl).pipe(z.string().url()).optional().nullable(),
   repoRef: z.string().optional().nullable(),
   defaultRef: z.string().optional().nullable(),
   visibility: projectWorkspaceVisibilitySchema.optional(),

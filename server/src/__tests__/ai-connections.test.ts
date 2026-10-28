@@ -1256,6 +1256,20 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     }
   });
 
+  it("leaves archived connections out of the selectable list", async () => {
+    // Routed (gateway) connections never set a personal default, so this does not disturb other tests.
+    const base = { provider: "openai", method: "api_key", ownership: "personal", allAgents: true, agentIds: [] } as const;
+    const routing = (host: string) => ({ kind: "gateway", protocol: "chat", auth: "bearer", baseUrl: `https://${host}.example/v1`, models: [{ id: "m" }] }) as const;
+    const kept = await service.save(companyId, "alice", { ...base, name: "Archived list kept", routing: { ...routing("list-kept"), models: [{ id: "m" }] } }, "kept-credential");
+    const removed = await service.save(companyId, "alice", { ...base, name: "Archived list removed", routing: { ...routing("list-removed"), models: [{ id: "m" }] } }, "removed-credential");
+    await db.update(toolConnections).set({ status: "archived", enabled: false }).where(eq(toolConnections.id, removed.connectionId));
+    await db.update(connectionGrants).set({ status: "revoked" }).where(eq(connectionGrants.connectionId, removed.connectionId));
+    const names = (await service.list(companyId, "alice")).map((account) => account.name);
+    expect(names).toContain("Archived list kept");
+    expect(names).not.toContain("Archived list removed");
+    expect(kept.connectionId).not.toBe(removed.connectionId);
+  });
+
   it("makes a provider application visible again when a new connection reuses an archived one", async () => {
     const routing = { kind: "gateway", protocol: "chat", auth: "bearer", baseUrl: "https://archived-app.example/v1", models: [{ id: "archived-app-model" }] } as const;
     const input = { provider: "openai", method: "api_key", ownership: "shared", allAgents: true, agentIds: [], routing: { ...routing, models: [...routing.models] } } as const;

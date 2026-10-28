@@ -137,6 +137,8 @@ export function aiConnectionService(db: Db) {
         connection.config.ai,
       );
       if (!metadata.success) return [];
+      // An archived connection is removed, not waiting for a reconnect: leave it out of the selectable list.
+      if (connection.status === "archived") return [];
       const needsReconnect = aiSubscriptionNeedsIsolatedLogin(connection.config);
       if (!canUseCredential(grant, userId, members.filter((m) => m.grantId === grant.id)))
         return [];

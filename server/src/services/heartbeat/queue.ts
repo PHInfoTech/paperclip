@@ -2813,6 +2813,12 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
 
       const cancelledRunsToEmit: (typeof heartbeatRuns.$inferSelect)[] = [];
 
+      // The first resolution reads through the shared pool. Doing that inside the
+      // transaction below holds one connection while waiting for a second, so
+      // concurrent wakeups can exhaust the pool and deadlock. Settle it first; a
+      // failure stays on the memoised promise and still throws where it is used.
+      await resolveQueuedResponsibleUserId().catch(() => undefined);
+
       const outcome = await db
         .transaction(async (tx) => {
           await tx.execute(
@@ -4352,6 +4358,16 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
         .catch((error) => {
           if (isExternalChatWaitAuthorizationContention(error))
             return { kind: "deferred" as const };
+          // Another open execution of the same routine already holds the issue
+          // lock. The transaction rolled back, so treat the wake like any other
+          // blocked admission instead of surfacing a failed issue update.
+          if (isUniqueViolation(error, OPEN_ROUTINE_EXECUTION_CONSTRAINT)) {
+            logger.warn(
+              { err: error, agentId, issueId },
+              "wake deferred: an open execution of the same routine already holds the issue lock",
+            );
+            return { kind: "deferred" as const };
+          }
           throw error;
         });
 
@@ -4488,6 +4504,12 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       });
       return mergedRun;
     }
+
+    // The first resolution reads through the shared pool. Doing that inside the
+    // transaction below holds one connection while waiting for a second, so
+    // concurrent wakeups can exhaust the pool and deadlock. Settle it first; a
+    // failure stays on the memoised promise and still throws where it is used.
+    await resolveQueuedResponsibleUserId().catch(() => undefined);
 
     const queueOutcome = await db.transaction(async (tx) => {
       await tx.execute(

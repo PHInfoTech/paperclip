@@ -235,6 +235,32 @@ describe.skipIf(!support.supported)("heartbeat queue database wiring", () => {
     expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0].executionRunId).toBeNull();
   });
 
+  it("does not starve a small connection pool when concurrent wakes resolve their responsible user", async () => {
+    const { agent, issue } = await fixture("succeeded");
+    await db.update(issues).set({ executionRunId: null, executionAgentNameKey: null, executionLockedAt: null }).where(eq(issues.id, issue.id));
+    // Every wake transaction holds one connection; a lookup that needs a second
+    // one from the same pool deadlocks as soon as the pool is fully held.
+    const smallPool = createDb(database.connectionString, { maxConnections: 2 });
+    try {
+      const deps = callbacks(smallPool);
+      deps.getAgent.mockResolvedValue(agent);
+      deps.instanceSettings.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false } as Awaited<ReturnType<typeof deps.instanceSettings.getExperimental>>);
+      const queue = createHeartbeatQueue(smallPool, deps);
+      const wakes = Array.from({ length: 6 }, (_, index) => queue.enqueueWakeup(agent.id, {
+        source: "automation", reason: `starvation-${index}`, requestedByActorType: "system", requestedByActorId: "test",
+        contextSnapshot: { issueId: issue.id },
+      }).then(() => "ok", (error: Error) => `err:${error.message}`));
+      const outcome = await Promise.race([
+        Promise.all(wakes),
+        new Promise<string>(resolve => setTimeout(() => resolve("deadlocked"), 15_000)),
+      ]);
+      expect(outcome).not.toBe("deadlocked");
+      expect(outcome).toEqual(Array(6).fill("err:Unable to resolve responsible user for heartbeat run dispatch"));
+    } finally {
+      await smallPool.$client.end({ timeout: 1 });
+    }
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
+
   it.each(["running", "failed"])("resumes the %s native owner before promoting its queued waiter", async status => {
     const { run, issue, agent, company } = await fixture(status);
     await db.update(heartbeatRuns).set({ runtimeMode: "native", nativeIssueId: issue.id, runnerProfileJson: {

@@ -78,7 +78,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useCopyAction } from "@/lib/use-copy-action";
 import { resolveAuthorizationTarget } from "@/lib/authorizationUrl";
-import { navigateTopLevel } from "@/lib/browserNavigation";
+import { navigatePopup, navigateTopLevel } from "@/lib/browserNavigation";
 import { prepareOAuthNavigation, savePendingCloudHandoff } from "@/lib/oauthHandoff";
 import { redactUrlSecrets } from "@/lib/redact-url-secrets";
 import { askFirstCatalogEntryIdsFor } from "./connection-defaults";
@@ -808,8 +808,9 @@ function StandardConnectionSetupFlow({
       onPhaseChange?.("needs_retry");
       return;
     }
-    popup.location.assign(url);
-    popup.focus();
+    const shown = navigatePopup(popup, url, "paperclip-connection-oauth");
+    if (shown) oauthPopupRef.current = shown;
+    shown?.focus();
   }, [host, onPhaseChange]);
 
   const openAuthorizationTab = useCallback(() => {
@@ -1115,8 +1116,9 @@ function StandardConnectionSetupFlow({
       setEnrollmentAuthorizationUrl(target.url);
       const popup = oauthPopupRef.current;
       if (popup && !popup.closed) {
-        popup.location.assign(target.url);
-        popup.focus();
+        const shown = navigatePopup(popup, target.url, "paperclip-connection-oauth");
+        if (shown) oauthPopupRef.current = shown;
+        shown?.focus();
       } else {
         setConnectorEnrollmentError("Open authorization in a new tab to continue.");
       }

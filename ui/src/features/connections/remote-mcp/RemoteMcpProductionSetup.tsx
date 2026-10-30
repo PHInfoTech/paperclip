@@ -13,7 +13,7 @@ import { useCompany } from "@/context/CompanyContext";
 import { findAggregatorApp } from "@paperclipai/shared/aggregator-app-catalog";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { resolveAuthorizationTarget } from "@/lib/authorizationUrl";
-import { navigateTopLevel } from "@/lib/browserNavigation";
+import { navigatePopup, navigateTopLevel } from "@/lib/browserNavigation";
 import { queryKeys } from "@/lib/queryKeys";
 import { RemoteMcpConnectionSetup } from "./RemoteMcpConnectionSetup";
 import { remoteMcpProviders, type RemoteMcpProviderId } from "./providers";
@@ -189,8 +189,10 @@ export function RemoteMcpProductionSetup({ providerId, connection, host = "page"
         try {
           if (host === "dialog") {
             if (!popup.current || popup.current.closed) throw new Error("Sign-in window unavailable");
-            popup.current.location.assign(target.url);
-            popup.current.focus();
+            const shown = navigatePopup(popup.current, target.url, "paperclip-connection-oauth");
+            if (!shown) throw new Error("Sign-in window unavailable");
+            popup.current = shown;
+            shown.focus();
           } else navigateTopLevel(target.url);
         } catch {
           // The connection and OAuth session already exist. Preserve them and

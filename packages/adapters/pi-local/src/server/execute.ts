@@ -60,6 +60,7 @@ import { createPiStdoutCompactor, resolvePiStdoutLogMode } from "./stdout-compac
 import { ensurePiModelConfiguredAndAvailable } from "./models.js";
 import { preparePiRuntimeConfig } from "./runtime-config.js";
 import { preparePiOpenRouterExtension } from "./openrouter-extension.js";
+import { discoverPiMcpToolNames, preparePiMcpExtension } from "./mcp-extension.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -343,8 +344,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     env.PI_CODING_AGENT_DIR = localAgentConfigDir;
   }
   let attributionExtension: Awaited<ReturnType<typeof preparePiOpenRouterExtension>> | undefined;
+  let mcpExtension: Awaited<ReturnType<typeof preparePiMcpExtension>> | undefined;
+  let mcpToolNames: string[] = [];
   try {
     attributionExtension = await preparePiOpenRouterExtension();
+    // Paperclip-assigned MCP servers (e.g. the project's RAG server). Local
+    // execution only: the extension carries run-scoped tokens and is not staged
+    // to remote targets.
+    const runtimeMcpServers = ctx.runtimeMcp?.getServers() ?? [];
+    if (runtimeMcpServers.length > 0) {
+      if (executionTargetIsRemote) {
+        await onLog("stderr", "[paperclip] Paperclip-managed MCP servers are not delivered to remote Pi execution targets.\n");
+      } else {
+        mcpExtension = await preparePiMcpExtension(runtimeMcpServers);
+        mcpToolNames = await discoverPiMcpToolNames(mcpExtension.extensionPath);
+        await onLog("stdout", `[paperclip] Exposing ${mcpToolNames.length} tool(s) from ${runtimeMcpServers.length} Paperclip-managed MCP server(s) to Pi through an extension.\n`);
+      }
+    }
     let attributionExtensionPath = attributionExtension.extensionPath;
     // Prepend installed skill `bin/` dirs to PATH so an agent's bash tool can
     // invoke skill binaries (e.g. `paperclip-get-issue`) by name. Without this,
@@ -666,12 +682,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (modelId) args.push("--model", modelId);
       if (thinking) args.push("--thinking", thinking);
 
-      args.push("--tools", "read,bash,edit,write,grep,find,ls");
+      args.push("--tools", ["read", "bash", "edit", "write", "grep", "find", "ls", ...mcpToolNames].join(","));
       args.push("--session", sessionFile);
       args.push("--skill", remoteSkillsDir ?? PI_AGENT_SKILLS_DIR);
 
       if (extraArgs.length > 0) args.push(...extraArgs);
       args.push("--extension", attributionExtensionPath);
+      if (mcpExtension) args.push("--extension", mcpExtension.extensionPath);
 
       // Add the user prompt as the last argument
       args.push(userPrompt);
@@ -923,6 +940,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
     }
   } finally {
-    await Promise.all([preparedRuntimeConfig.cleanup(), attributionExtension?.cleanup()]);
+    await Promise.all([preparedRuntimeConfig.cleanup(), attributionExtension?.cleanup(), mcpExtension?.cleanup()]);
   }
 }

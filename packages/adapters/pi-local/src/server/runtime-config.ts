@@ -88,6 +88,33 @@ function parseProviderConfig(
   }
 }
 
+// An OpenAI-compatible provider that lists no models gets them from its own
+// `GET <baseUrl>/models`, so a gateway such as Switchyard stays the single source
+// of truth for which models exist. Failures leave the provider unchanged.
+async function fillServedModels(providers: Record<string, unknown>, notes: string[]): Promise<void> {
+  await Promise.all(Object.entries(providers).map(async ([name, provider]) => {
+    if (!isPlainObject(provider) || typeof provider.baseUrl !== "string" || provider.api !== "openai-completions") return;
+    if (Array.isArray(provider.models) && provider.models.length > 0) return;
+    try {
+      const headers: Record<string, string> = {};
+      if (typeof provider.apiKey === "string" && provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
+      const response = await fetch(`${provider.baseUrl.replace(/\/+$/, "")}/models`, {
+        headers,
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body: unknown = await response.json();
+      const data = isPlainObject(body) && Array.isArray(body.data) ? body.data : [];
+      const ids = data.flatMap((entry) => (isPlainObject(entry) && typeof entry.id === "string" ? [entry.id] : []));
+      if (ids.length === 0) throw new Error("no models listed");
+      provider.models = ids.map((id) => ({ id }));
+      notes.push(`Pi provider "${name}": discovered ${ids.length} model(s) from ${provider.baseUrl}/models.`);
+    } catch (err) {
+      notes.push(`Pi provider "${name}": could not list models from ${provider.baseUrl}/models (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }));
+}
+
 // Materialize custom Pi providers supplied via PAPERCLIP_PI_PROVIDERS (a JSON
 // object in Pi's models.json "providers" shape) into a managed agent-config dir.
 //
@@ -135,6 +162,8 @@ export async function preparePiRuntimeConfig(input: {
       }
     }
   }
+  const discoveryNotes: string[] = [];
+  await fillServedModels(providers, discoveryNotes);
   const agentConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-pi-agent-config-"));
   try {
     await fs.writeFile(
@@ -156,6 +185,7 @@ export async function preparePiRuntimeConfig(input: {
     },
     notes: [
       ...(warning ? [warning] : []),
+      ...discoveryNotes,
       `Injected ${Object.keys(providers).length} custom Pi provider(s) from PAPERCLIP_PI_PROVIDERS into a managed models.json: ${Object.keys(providers).join(", ")}.`,
     ],
     agentConfigDir,

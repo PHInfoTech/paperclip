@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { asBoolean } from "@paperclipai/adapter-utils/server-utils";
+import type { AdapterRuntimeMcpServer } from "@paperclipai/adapter-utils";
 
 type PreparedOpenCodeRuntimeConfig = {
   env: Record<string, string>;
@@ -103,10 +104,28 @@ async function readJsonObject(filepath: string): Promise<Record<string, unknown>
   }
 }
 
+/** OpenCode prefixes tool names with the server key, so keep keys to a safe charset. */
+function buildOpenCodeMcpEntries(servers: readonly AdapterRuntimeMcpServer[]): Record<string, unknown> {
+  const entries: Record<string, unknown> = {};
+  for (const server of servers) {
+    const base = server.name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "paperclip_mcp";
+    let name = base;
+    for (let suffix = 2; name in entries; suffix += 1) name = `${base}_${suffix}`;
+    entries[name] = {
+      type: "remote",
+      url: server.url,
+      enabled: true,
+      headers: { Authorization: `Bearer ${server.token}` },
+    };
+  }
+  return entries;
+}
+
 export async function prepareOpenCodeRuntimeConfig(input: {
   env: Record<string, string>;
   config: Record<string, unknown>;
   targetIsRemote?: boolean;
+  runtimeMcpServers?: readonly AdapterRuntimeMcpServer[];
 }): Promise<PreparedOpenCodeRuntimeConfig> {
   const skipPermissions = asBoolean(input.config.dangerouslySkipPermissions, true);
 
@@ -227,7 +246,17 @@ export async function prepareOpenCodeRuntimeConfig(input: {
     nextConfig.small_model = smallModel;
     notes.push(`Pinned OpenCode small_model to ${smallModel}.`);
   }
-  await fs.writeFile(runtimeConfigPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  // Paperclip-assigned MCP servers (e.g. the project's RAG/context server). Run-scoped
+  // entries win over same-named user entries so a stale static token is never used.
+  const runtimeMcp = buildOpenCodeMcpEntries(input.runtimeMcpServers ?? []);
+  if (Object.keys(runtimeMcp).length > 0) {
+    nextConfig.mcp = {
+      ...(isPlainObject(existingConfig.mcp) ? existingConfig.mcp : {}),
+      ...runtimeMcp,
+    };
+    notes.push(`Injected ${Object.keys(runtimeMcp).length} Paperclip-managed MCP server(s): ${Object.keys(runtimeMcp).join(", ")}.`);
+  }
+  await fs.writeFile(runtimeConfigPath, `${JSON.stringify(nextConfig, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 
   return {
     env: {

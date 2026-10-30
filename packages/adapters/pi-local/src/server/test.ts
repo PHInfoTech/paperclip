@@ -20,6 +20,7 @@ import {
   resolveAdapterExecutionTargetCwd,
 } from "@paperclipai/adapter-utils/execution-target";
 import { discoverPiModelsCached } from "./models.js";
+import { preparePiRuntimeConfig } from "./runtime-config.js";
 import { parsePiJsonl } from "./parse.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 
@@ -81,6 +82,18 @@ function buildPiModelDiscoveryFailureCheck(message: string): AdapterEnvironmentC
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
+  const cleanups: Array<() => Promise<void>> = [];
+  try {
+    return await runEnvironmentTest(ctx, cleanups);
+  } finally {
+    await Promise.all(cleanups.map((cleanup) => cleanup().catch(() => undefined)));
+  }
+}
+
+async function runEnvironmentTest(
+  ctx: AdapterEnvironmentTestContext,
+  cleanups: Array<() => Promise<void>>,
+): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
   const config = parseObject(ctx.config);
   const command = asString(config.command, "pi");
@@ -125,7 +138,16 @@ export async function testEnvironment(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  const runtimeEnv = normalizeEnv(ensurePathInEnv({ ...process.env, ...env }));
+  let runtimeEnv = normalizeEnv(ensurePathInEnv({ ...process.env, ...env }));
+  // Custom providers (PAPERCLIP_PI_PROVIDERS, incl. AI-connection routing) only
+  // exist for Pi once written to a models.json; the hello probe needs it too.
+  if (!runtimeEnv.PI_CODING_AGENT_DIR) {
+    const prepared = await preparePiRuntimeConfig({ env: runtimeEnv }).catch(() => null);
+    if (prepared?.agentConfigDir) {
+      cleanups.push(prepared.cleanup);
+      runtimeEnv = normalizeEnv(prepared.env);
+    }
+  }
 
   const cwdInvalid = checks.some((check) => check.code === "pi_cwd_invalid");
   if (cwdInvalid) {

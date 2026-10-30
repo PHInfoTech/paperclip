@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AdapterModel } from "@paperclipai/adapter-utils";
 import { asString, runChildProcess } from "@paperclipai/adapter-utils/server-utils";
+import { preparePiRuntimeConfig } from "./runtime-config.js";
 
 const MODELS_CACHE_TTL_MS = 60_000;
 
@@ -108,20 +109,31 @@ export async function discoverPiModels(input: {
   const command = resolvePiCommand(input.command);
   const cwd = asString(input.cwd, process.cwd());
   const env = normalizeEnv(input.env);
-  const runtimeEnv = normalizeEnv({ ...process.env, ...env });
+  const baseEnv = normalizeEnv({ ...process.env, ...env });
+  // Custom providers (PAPERCLIP_PI_PROVIDERS) only exist for Pi once materialized
+  // into a models.json; skip when the caller already pointed Pi at a config dir.
+  const prepared = baseEnv.PI_CODING_AGENT_DIR
+    ? null
+    : await preparePiRuntimeConfig({ env: baseEnv }).catch(() => null);
+  const runtimeEnv = prepared?.env ?? baseEnv;
 
-  const result = await runChildProcess(
-    `pi-models-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    command,
-    ["--list-models"],
-    {
-      cwd,
-      env: runtimeEnv,
-      timeoutSec: 20,
-      graceSec: 3,
-      onLog: async () => {},
-    },
-  );
+  let result;
+  try {
+    result = await runChildProcess(
+      `pi-models-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      command,
+      ["--list-models"],
+      {
+        cwd,
+        env: runtimeEnv,
+        timeoutSec: 20,
+        graceSec: 3,
+        onLog: async () => {},
+      },
+    );
+  } finally {
+    await prepared?.cleanup();
+  }
 
   if (result.timedOut) {
     throw new Error("`pi --list-models` timed out.");

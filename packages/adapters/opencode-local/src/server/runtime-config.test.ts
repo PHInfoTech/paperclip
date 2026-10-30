@@ -32,6 +32,26 @@ async function makeConfigHome(initialConfig?: Record<string, unknown>) {
 }
 
 describe("prepareOpenCodeRuntimeConfig", () => {
+  it("injects Paperclip-managed MCP servers as remote entries and keeps user entries", async () => {
+    const configHome = await makeConfigHome({ mcp: { mine: { type: "local", command: ["x"] } } });
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: { XDG_CONFIG_HOME: configHome },
+      config: {},
+      runtimeMcpServers: [
+        { name: "PHInfoTech RAG", url: "https://mcp.example/rag", token: "tok-1", connectionId: "c1" },
+        { name: "phinfotech rag", url: "https://mcp.example/rag2", token: "tok-2", connectionId: "c2" },
+      ],
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+    const config = JSON.parse(await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"));
+    expect(config.mcp.mine).toEqual({ type: "local", command: ["x"] });
+    expect(config.mcp.phinfotech_rag).toEqual({
+      type: "remote", url: "https://mcp.example/rag", enabled: true, headers: { Authorization: "Bearer tok-1" },
+    });
+    expect(config.mcp.phinfotech_rag_2.url).toBe("https://mcp.example/rag2");
+    await prepared.cleanup();
+  });
+
   it("attributes custom OpenRouter aliases and inline overrides without changing other endpoints", async () => {
     const other = { options: { baseURL: "https://other.example/v1", headers: { "X-Title": "Other" } } };
     const configHome = await makeConfigHome({ provider: { other, openrouter: other } });

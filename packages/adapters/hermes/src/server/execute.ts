@@ -19,6 +19,7 @@
  */
 
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type {
@@ -53,6 +54,7 @@ import {
   resolveProvider,
 } from "./detect-model.js";
 import { reconcileHermesPaperclipSkills } from "./skills.js";
+import { prepareHermesMcpHome } from "./mcp-home.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -583,14 +585,32 @@ export async function execute(
     return ctx.onLog(stream, chunk);
   };
 
-  const result = await runChildProcess(ctx.runId, hermesCmd, args, {
-    cwd,
-    env,
-    timeoutSec,
-    graceSec,
-    onLog: wrappedOnLog,
-    onSpawn: ctx.onSpawn,
+  // Paperclip-assigned MCP servers (e.g. the project's RAG server) reach Hermes
+  // through a run-scoped HERMES_HOME whose config.yaml carries them.
+  const mcpHome = await prepareHermesMcpHome({
+    realHome: env.HERMES_HOME
+      ? path.resolve(env.HERMES_HOME)
+      : path.join(env.HOME ? path.resolve(env.HOME) : os.homedir(), ".hermes"),
+    servers: ctx.runtimeMcp?.getServers() ?? [],
   });
+  if (mcpHome) {
+    env.HERMES_HOME = mcpHome.hermesHome;
+    for (const note of mcpHome.notes) await ctx.onLog("stdout", `[hermes] ${note}\n`);
+  }
+
+  let result: Awaited<ReturnType<typeof runChildProcess>>;
+  try {
+    result = await runChildProcess(ctx.runId, hermesCmd, args, {
+      cwd,
+      env,
+      timeoutSec,
+      graceSec,
+      onLog: wrappedOnLog,
+      onSpawn: ctx.onSpawn,
+    });
+  } finally {
+    await mcpHome?.cleanup();
+  }
 
   // ── Parse output ───────────────────────────────────────────────────────
   const parsed = parseHermesOutput(result.stdout || "", result.stderr || "");

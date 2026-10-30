@@ -245,3 +245,27 @@ describe("preparePiRuntimeConfig", () => {
     await prepared.cleanup();
   });
 });
+
+describe("preparePiRuntimeConfig served-model discovery", () => {
+  it("fills an empty model list from the provider's /models endpoint", async () => {
+    const http = await import("node:http");
+    const server = http.createServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(req.url === "/v1/models" ? { data: [{ id: "switchyard/a" }, { id: "switchyard/b" }] } : {}));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    const prepared = await preparePiRuntimeConfig({ env: {
+      PAPERCLIP_PI_PROVIDERS: JSON.stringify({ paperclip: { baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", apiKey: "k" } }),
+    } });
+    try {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const written = JSON.parse(await fs.readFile(path.join(prepared.agentConfigDir!, "models.json"), "utf8"));
+      expect(written.providers.paperclip.models).toEqual([{ id: "switchyard/a" }, { id: "switchyard/b" }]);
+    } finally {
+      await prepared.cleanup();
+      server.close();
+    }
+  });
+});

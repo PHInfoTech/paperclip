@@ -127,6 +127,20 @@ describe("provider routing", () => {
       "openrouter/anthropic/claude-sonnet-4.6",
     );
   });
+  it("routes a local endpoint into Pi's provider config and prefixes the model", () => {
+    const route = aiProviderRoutingSchema.parse({ kind: "local", protocol: "chat", auth: "bearer", baseUrl: "http://localhost:4000/v1/" });
+    expect(isAiConnectionCompatible({ provider: "openai", method: "api_key", routing: route }, "pi_local")).toBe(true);
+    const projected = managedProviderRouting(route, "pi_local", "selected-key", "switchyard/ornith35");
+    expect(projected.config.model).toBe("paperclip/switchyard/ornith35");
+    expect(JSON.parse(projected.env.PAPERCLIP_PI_PROVIDERS)).toEqual({
+      paperclip: {
+        baseUrl: "http://localhost:4000/v1",
+        api: "openai-completions",
+        apiKey: "selected-key",
+        models: [{ id: "switchyard/ornith35" }],
+      },
+    });
+  });
   it("projects only a Bedrock API key and rejects general AWS access keys", () => {
     const routing = aiProviderRoutingSchema.parse({
       kind: "bedrock",

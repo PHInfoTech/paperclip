@@ -2624,9 +2624,10 @@ export function agentRoutes(
     gemini_local: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     kimi_local: ["KIMI_MODEL_API_KEY"],
     opencode_local: ["PAPERCLIP_OPENCODE_PROVIDERS", "OPENCODE_AUTH_JSON"],
+    pi_local: ["PAPERCLIP_PI_PROVIDERS"],
   };
   const POOL_AUTH_OVERRIDE_ENV_KEYS = [
-    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "PAPERCLIP_OPENCODE_PROVIDERS", "OPENCODE_AUTH_JSON",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "PAPERCLIP_OPENCODE_PROVIDERS", "PAPERCLIP_PI_PROVIDERS", "OPENCODE_AUTH_JSON",
   ] as const;
 
   async function callerUsesAiConnectionPool(req: Request, companyId: string): Promise<boolean> {

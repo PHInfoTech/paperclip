@@ -53,6 +53,7 @@ export const AI_AUTH_ENV_KEYS = [
   "OPENCODE_CONFIG",
   "OPENCODE_CONFIG_DIR",
   "PAPERCLIP_OPENCODE_PROVIDERS",
+  "PAPERCLIP_PI_PROVIDERS",
   "ANTHROPIC_BASE_URL",
   "OPENAI_BASE_URL",
   "XAI_BASE_URL",
@@ -74,6 +75,7 @@ export function stripAiAuthBindings(env: unknown): Record<string, unknown> {
         "CLAUDE_CODE_USE_VERTEX",
         "CLAUDE_CODE_USE_FOUNDRY",
         "PAPERCLIP_OPENCODE_PROVIDERS",
+        "PAPERCLIP_PI_PROVIDERS",
       ].includes(key)
     )
       delete result[key];
@@ -247,6 +249,7 @@ export async function prepareManagedAiRuntime(
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
     "PAPERCLIP_OPENCODE_PROVIDERS",
+    "PAPERCLIP_PI_PROVIDERS",
     "PAPERCLIP_AI_PROVIDER_URL", "PAPERCLIP_CODEX_PROVIDERS", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "GOOGLE_GEMINI_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL",
   ]) {
     if (configuredEnv[key])

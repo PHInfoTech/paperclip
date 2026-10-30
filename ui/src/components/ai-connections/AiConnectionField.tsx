@@ -33,6 +33,7 @@ export function aiProviderForAdapter(
       claude_local: "anthropic",
       codex_local: "openai",
       opencode_local: "openrouter",
+      pi_local: "openrouter",
       grok_local: "xai",
       copilot_runtime: "github",
       gemini_local: "google",

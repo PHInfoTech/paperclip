@@ -66,6 +66,19 @@ export function managedProviderRouting(
     });
     env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     config.model = aiRoutingModel(route, harness, model);
+  } else if (harness === "pi_local") {
+    // Pi reads custom endpoints from a models.json the adapter writes from
+    // PAPERCLIP_PI_PROVIDERS; it lists the endpoint's models itself.
+    const id = model.startsWith("paperclip/") ? model.slice("paperclip/".length) : model;
+    env.PAPERCLIP_PI_PROVIDERS = JSON.stringify({
+      paperclip: {
+        baseUrl,
+        api: "openai-completions",
+        apiKey: credential || "none",
+        ...(id ? { models: [{ id }] } : {}),
+      },
+    });
+    config.model = aiRoutingModel(route, harness, model);
   } else if (harness === "hermes_local") {
     env.OPENAI_BASE_URL = baseUrl;
     env.OPENAI_API_KEY = credential;

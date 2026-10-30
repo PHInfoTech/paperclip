@@ -111,7 +111,7 @@ export function isAiRoutingCompatible(
     ].includes(harness);
   if (route.protocol === "responses") return harness === "codex_local";
   if (route.protocol === "messages") return harness === "claude_local";
-  return ["opencode_local", "hermes_local"].includes(harness);
+  return ["opencode_local", "pi_local", "hermes_local"].includes(harness);
 }
 export function aiRoutingBaseUrl(
   route: AiProviderRouting,
@@ -122,13 +122,13 @@ export function aiRoutingBaseUrl(
     : (route.baseUrl ?? "").replace(/\/+$/, "");
 }
 
-/** OpenCode names models with a provider prefix; other harnesses use the raw ID. */
+/** OpenCode and Pi name models with a provider prefix; other harnesses use the raw ID. */
 export function aiRoutingModel(
   route: AiProviderRouting,
   harness: string,
   model: string,
 ): string {
-  if (!model || harness !== "opencode_local") return model;
+  if (!model || (harness !== "opencode_local" && harness !== "pi_local")) return model;
   const prefix = route.kind === "openrouter" ? "openrouter" : "paperclip";
   return model.startsWith(`${prefix}/`) ? model : `${prefix}/${model}`;
 }

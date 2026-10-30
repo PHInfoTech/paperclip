@@ -4627,7 +4627,7 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
           ? await collectLocalSkillInventory(skillDir)
           : [{ path: "SKILL.md", kind: "skill" as const }];
         const parsed = parseFrontmatterMarkdown(markdown);
-        const accessSourceId = await retainProjectSkillAccess(db, companyId, forkSource?.accessSourceId);
+        const accessSourceId = await retainProjectSkillAccess(tx as unknown as Db, companyId, forkSource?.accessSourceId);
         const metadata = {
           sourceKind: "managed_local",
           ...(accessSourceId ? { accessSourceId } : {}),

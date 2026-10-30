@@ -409,7 +409,7 @@ export function projectRoutes(db: Db) {
           const current = await projectToolContext(tx as unknown as Db, museActor, true);
           try {
             const execution = parseNativeExecutionInput(current.run.runnerProfileJson?.nativeExecutionInput);
-            const broker = museExternalAgents(db);
+            const broker = museExternalAgents(tx as unknown as Db);
             if (current.run.runtimeMode !== "native" || execution.schema !== "paperclip.native-execution-input.v8"
               || execution.binding.companyId !== actorCompanyId || execution.binding.agentId !== agentId
               || execution.binding.runId !== runId || execution.binding.issueId !== current.issue.id

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AdapterModel } from "@paperclipai/adapter-utils";
-import { asString, runChildProcess } from "@paperclipai/adapter-utils/server-utils";
+import { asString, runChildProcess, sanitizeInheritedPaperclipEnv } from "@paperclipai/adapter-utils/server-utils";
 import { preparePiRuntimeConfig } from "./runtime-config.js";
 
 const MODELS_CACHE_TTL_MS = 60_000;
@@ -109,7 +109,7 @@ export async function discoverPiModels(input: {
   const command = resolvePiCommand(input.command);
   const cwd = asString(input.cwd, process.cwd());
   const env = normalizeEnv(input.env);
-  const baseEnv = normalizeEnv({ ...process.env, ...env });
+  const baseEnv = normalizeEnv({ ...sanitizeInheritedPaperclipEnv(process.env), ...env });
   // Custom providers (PAPERCLIP_PI_PROVIDERS) only exist for Pi once materialized
   // into a models.json; skip when the caller already pointed Pi at a config dir.
   const prepared = baseEnv.PI_CODING_AGENT_DIR

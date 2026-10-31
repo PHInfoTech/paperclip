@@ -7,6 +7,7 @@ import {
   asString,
   parseObject,
   ensurePathInEnv,
+  sanitizeInheritedPaperclipEnv,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   asStringArray,
@@ -138,7 +139,7 @@ async function runEnvironmentTest(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  let runtimeEnv = normalizeEnv(ensurePathInEnv({ ...process.env, ...env }));
+  let runtimeEnv = normalizeEnv(ensurePathInEnv({ ...sanitizeInheritedPaperclipEnv(process.env), ...env }));
   // Custom providers (PAPERCLIP_PI_PROVIDERS, incl. AI-connection routing) only
   // exist for Pi once written to a models.json; the hello probe needs it too.
   if (!runtimeEnv.PI_CODING_AGENT_DIR) {

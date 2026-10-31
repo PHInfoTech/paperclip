@@ -1,4 +1,8 @@
+import { CoordinatorRelativeTime } from "@/components/coordinator/CoordinatorRelativeTime";
+import { useCoordinatorPresentation } from "@/components/coordinator/CoordinatorPresentation";
 import { TextAttachmentContext } from "@/context/TextAttachmentContext";
+import { useArtifactsV1Enabled } from "@/hooks/useArtifactsV1Enabled";
+import { ArtifactRow, ArtifactRowGroup, inlineRowStyle, subjectFromAttachmentRef } from "@/components/artifacts/v1";
 import { isTextAttachment } from "@/lib/issue-attachments";
 import { ArtifactPreview } from "@/components/artifacts/ArtifactCard";
 import { isVideoLikeOutput } from "@/lib/issue-output";
@@ -144,6 +148,11 @@ function TaskChatBubbleContent({
   tryAgainNoLiveExecutionPathPending,
 }: TaskChatBubbleProps) {
   const streamlined = useStreamlinedTaskChatPresentation();
+  const coordinator = useCoordinatorPresentation();
+  const recordedTimestamp = item.createdAtIso ?? (typeof item.atMs === "number" && Number.isFinite(item.atMs) ? new Date(item.atMs) : null);
+  const timestamp = coordinator && recordedTimestamp && !item.optimistic
+    ? <CoordinatorRelativeTime value={recordedTimestamp} /> : item.timestamp;
+  const { enabled: artifactsV1 } = useArtifactsV1Enabled();
   const openText = useContext(TextAttachmentContext);
   // Task attachments share the page gallery; standalone images retain the bubble viewer.
   const openIssueGallery = useContext(IssueGalleryContext);
@@ -271,7 +280,7 @@ function TaskChatBubbleContent({
           </MarkdownBody>
         </div>
       ) : null}
-      {imageRefs.length > 0 ? (
+      {!artifactsV1 && imageRefs.length > 0 ? (
         <div
           className="flex max-w-(--pct-85) flex-col gap-2"
           data-testid="task-chat-bubble-media"
@@ -314,7 +323,7 @@ function TaskChatBubbleContent({
           </span>
         </div>
       ) : null}
-      {attachmentRefs.length > 0 ? (
+      {!artifactsV1 && attachmentRefs.length > 0 ? (
         <div className="flex max-w-(--pct-85) flex-col gap-2">
           <span className="text-xs text-muted-foreground">
             Files · {attachmentRefs.length}
@@ -385,6 +394,7 @@ function TaskChatBubbleContent({
           </ul>
         </div>
       ) : null}
+      {coordinator && recordedTimestamp && attachedTurn ? <span className="px-1 text-(length:--text-micro) text-muted-foreground"><CoordinatorRelativeTime value={recordedTimestamp!} /></span> : null}
       {item.optimistic ? (
         <span className="flex items-center gap-1 px-1 text-(length:--text-micro) text-muted-foreground">
           <span>{item.optimistic === "queued" ? "Queued" : "Sending…"}</span>
@@ -405,9 +415,9 @@ function TaskChatBubbleContent({
       ) : actions ? (
         streamlined ? (
           <div className="flex w-full items-center justify-between gap-2 px-1">
-            {item.timestamp ? (
+            {timestamp ? (
               <span className="text-(length:--text-micro) text-muted-foreground">
-                {item.timestamp}
+                {timestamp}
               </span>
             ) : null}
             {actions}
@@ -415,20 +425,38 @@ function TaskChatBubbleContent({
         ) : (
           <div className="flex items-center gap-1">
             {actions}
-            {item.timestamp ? (
+            {timestamp ? (
               <span className="px-1 text-(length:--text-micro) text-muted-foreground">
-                {item.timestamp}
+                {timestamp}
               </span>
             ) : null}
           </div>
         )
-      ) : item.timestamp || sentFromIMessage ? (
+      ) : timestamp || sentFromIMessage ? (
         // Timestamps are always visible (round 9) — no longer hover-revealed.
         <span className="px-1 text-(length:--text-micro) text-muted-foreground">
           {sentFromIMessage ? "Sent from iMessage" : null}
-          {sentFromIMessage && item.timestamp ? " · " : null}
-          {item.timestamp}
+          {sentFromIMessage && timestamp ? " · " : null}
+          {timestamp}
         </span>
+      ) : null}
+      {artifactsV1 && imageRefs.length + attachmentRefs.length > 0 ? (
+        // Artifacts V1 (doc/plans/2026-10-22-artifacts-mvp-v1.md): the files a message produced hang under its
+        // footer, 12px below, as rows inline at equal widths, wrapping past three. Pictures and video open the
+        // gallery, text opens a text tab when the panel offers one, anything else opens in a new tab.
+        <div className="w-full pt-2" data-testid="task-chat-bubble-artifacts-v1">
+          <ArtifactRowGroup>
+            {[...imageRefs, ...attachmentRefs].map((ref) => {
+              const subject = subjectFromAttachmentRef(ref);
+              const picture = isImageAttachment(ref) || isVideoLikeOutput(ref.contentType, ref.name);
+              const textTab = Boolean(openText && ref.id && isTextAttachment({ contentType: ref.contentType ?? "", originalFilename: ref.name }));
+              if (picture) return <ArtifactRow key={ref.url} subject={subject} onClick={() => openImage(ref.url)} style={inlineRowStyle} />;
+              // A text file keeps its link (modifier clicks, copying the address) while a plain click opens the text tab.
+              if (textTab) return <ArtifactRow key={ref.url} subject={subject} href={ref.openPath ?? ref.url} external onClick={() => openText?.(ref.id!, ref.name)} style={inlineRowStyle} />;
+              return <ArtifactRow key={ref.url} subject={subject} href={ref.openPath ?? ref.url} external style={inlineRowStyle} />;
+            })}
+          </ArtifactRowGroup>
+        </div>
       ) : null}
       {lightboxSrc !== null && lightboxIndex >= 0 ? (
         <ImageGalleryModal

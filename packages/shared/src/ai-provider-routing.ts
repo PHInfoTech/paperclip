@@ -82,8 +82,9 @@ export function aiRoutingHarness(
 ): string {
   if (adapter !== "paperclip_runner") return adapter;
   if (provider === "acpx" && acpxAgent === "copilot") return "copilot_runtime";
+  if (provider === "acpx" && acpxAgent === "antigravity") return "antigravity_runtime";
   const runner =
-    provider === "acpx" && (acpxAgent === "claude" || acpxAgent === "grok")
+    provider === "acpx" && ["claude", "grok", "pi"].includes(String(acpxAgent))
       ? acpxAgent
       : provider;
   return (
@@ -93,6 +94,7 @@ export function aiRoutingHarness(
         codex: "codex_local",
         opencode: "opencode_local",
         grok: "grok_local",
+        pi: "pi_local",
       } as Record<string, string>
     )[String(runner)] ?? "unsupported"
   );
@@ -107,11 +109,16 @@ export function isAiRoutingCompatible(
       "claude_local",
       "codex_local",
       "opencode_local",
+      "pi_local",
       "hermes_local",
     ].includes(harness);
   if (route.protocol === "responses") return harness === "codex_local";
   if (route.protocol === "messages") return harness === "claude_local";
-  return ["opencode_local", "pi_local", "hermes_local"].includes(harness);
+  // Pi reaches local endpoints through its generated provider config; custom
+  // gateways stay on OpenCode and Hermes.
+  return harness === "pi_local"
+    ? route.kind === "local"
+    : ["opencode_local", "hermes_local"].includes(harness);
 }
 export function aiRoutingBaseUrl(
   route: AiProviderRouting,

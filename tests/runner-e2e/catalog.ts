@@ -1,6 +1,12 @@
+import { FEEDBACK_PERSISTENCE_SUITE, feedbackPersistenceTask, feedbackPersistenceDigest } from "./feedback-persistence.js";
+import { followupStopTask, followupStopDigest } from "./followup-stop-resume.js";
+import { finalizationRecoveryTask, finalizationRecoveryDigest } from "./finalization-recovery.js";
+import { necessaryQuestionTask, necessaryQuestionDigest } from "./necessary-question.js";
 import { caseHandoffTask, caseHandoffDefinitionDigest } from "./case-handoffs-cases.js";
 import { caseReceiptTask, caseReceiptDefinitionDigest, CASE_RECEIPT_BUDGET_CENTS, CASE_RECEIPT_MAX_TURNS, CASE_RECEIPT_RUN_TIMEOUT_MS } from "./case-receipt-cases.js";
 import { TASK_WORKSPACES_SUITE, taskWorkspaceTask, taskWorkspaceProfile, taskWorkspaceDefinitionDigest } from "./task-workspaces-cases.js";
+import { repositoryProofTasks, repositoryProofProfile, repositoryProofDigest } from "./repository-verification.js";
+import { automaticRepositoryTask, automaticRepositoryDigest } from "./automatic-repository.js";
 import { nativeActiveStopTasks } from "./native-active-stop-tasks.js";
 import { piControlTasks } from "./pi-controls-cases.js";
 import { cursorNativeTasks } from "./cursor-native-cases.js";
@@ -13,11 +19,14 @@ import { NATIVE_INSTRUCTION_SUITE, NATIVE_INSTRUCTION_BASE_SHA, nativeInstructio
 import { nativeCompletionProfile, NATIVE_COMPLETION_BUDGET_CENTS } from "./native-completion-defaults.js";
 import { chatConfirmationTasks } from "./chat-cases.js";
 import { buildConnectionSuite } from "./connection-cases.js";
+import { buildGitHubReviewJourneySuite } from "./github-review-cases.js";
+import { buildAntigravityJourneySuite } from "./antigravity-journey-cases.js";
 import { hiringTemplateTasks, hiringTemplateProfile, hiringTemplateDefinitionDigest } from "./hiring-template-cases.js";
 import { copilotProviderDeathTasks } from "./copilot-active-stop-tasks.js";
 import { instructionPersistenceTask } from "./instruction-persistence.js";
 import { apiResponseReadingTask } from "./api-response-reading.js";
 import { taskTitleTasks, taskTitleDefinitionDigest, TASK_TITLE_BUDGET_CENTS } from "./task-titles.js";
+import { CHAT_FEATURE_SUITE, CHAT_FEATURE_BUDGET_CENTS, chatFeatureTasks, chatFeatureProfile, chatFeatureScenarios, chatFeatureDefinitionDigest } from "./chat-feature-cases.js";
 import { blockerTasks, blockerProfile } from "./blocker-cases.js";
 import { accountingTasks } from "./accounting-cases.js";
 import { continuationTasks, questionResumeTask } from "./continuation-cases.js";
@@ -530,6 +539,7 @@ export const runnerEnvironments: readonly EnvironmentFixture[] = [
           autoStopInterval: 5,
           autoArchiveInterval: 15,
           autoDeleteInterval: 60,
+          ttlMinutes: 60,
           timeoutMs: 300_000,
           livenessTimeoutMs: 30_000,
         },
@@ -1130,7 +1140,35 @@ function copilotFilePrompt(nonce: string): string {
   ].join("\n");
 }
 
+const repositoryModelProfiles = [
+  {
+    native: nativeProfile({
+      id: "runner-codex", label: "Codie staging-model diagnostic", provider: "codex", model: "gpt-6.1-sol", credential: "OPENAI_API_KEY",
+      modelQualification: { source: "candidate_runner_profile", qualificationId: "observed-staging-codie-model-2026-10-20" },
+    }),
+    legacy: runnerProfiles.find(profile => profile.id === "legacy-codex")!,
+  },
+  {
+    native: nativeProfile({
+      id: "runner-acpx-claude", label: "Claude staging-model diagnostic", provider: "acpx", acpxAgent: "claude", model: "claude-opus-5-5", credential: "ANTHROPIC_API_KEY",
+      modelQualification: { source: "candidate_runner_profile", qualificationId: "observed-staging-claude-model-2026-10-20" },
+    }),
+    legacy: runnerProfiles.find(profile => profile.id === "legacy-claude")!,
+  },
+];
+
 export const runnerSuites: readonly RunnerSuiteFixture[] = [
+  {
+    id: "daytona-restart-continuity", label: "Daytona controller outage continuity", manualOnly: true,
+    description: "Keep the original active native runner, task tools and saved files through more than two minutes without a controller, then commit the result without replay.",
+    groups: [], profiles: repositoryModelProfiles.map(({ native }) => productionStoryProfile(native)),
+    environments: runnerEnvironments.filter(environment => environment.id === "daytona"),
+    tasks: everydayTasks.filter(task => task.id === "recover-controller")
+      .map(task => ({ ...task, automaticRetryPolicy: "single_attempt" as const })), expectedMatrixSize: 2,
+    definitionMetadata: { version: 2, scheduling: "explicit-only", controllerDowntimeMs: 125_000,
+      maximumAttemptsPerCell: 1, budgetMonthlyCents: 1000, instructions: "production", grading: "same-active-process-lease-native-prefix-and-workspace-receipt",
+      authentication: "api-key", stagingAuthentication: "subscription", stagingQualification: false },
+  },
   {
     id: "codie-latency-diagnostic",
     label: "Native Codex latency diagnostic",
@@ -1166,6 +1204,65 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
     expectedMatrixSize: 3,
     definitionMetadata: { version: 1, definitionDigest: taskWorkspaceDefinitionDigest(), scheduling: "explicit-only", providerTurns: 3,
       attempts: 1, budgetMonthlyCents: 1000, project: "none", cwd: "unconfigured-task-default", oracle: "public-file-download-and-host-nested-git", remoteLifecycle: "per_turn" },
+  },
+  {
+    id: "followup-stop-resume", label: "Follow-up, Stop and retained-context resumption", manualOnly: true,
+    description: "Send an ordinary follow-up during active work, Stop through the task composer, observe a quiet cancelled run, then explicitly resume and download retained context with the earlier direction.",
+    groups: [], profiles: repositoryModelProfiles.map(({ native }) => productionDefaultHireProfile(native)),
+    environments: runnerEnvironments.filter(environment => environment.id === "local"), tasks: [followupStopTask], expectedMatrixSize: 2,
+    definitionMetadata: { version: 1, definitionDigest: followupStopDigest(), scheduling: "explicit-only", attempts: 1,
+      providerTurns: 2, budgetMonthlyCents: 1000, instructions: "production-default", stopObservationWindowMs: 5000,
+      surface: "paperclip", target: "isolated-development-instance", authentication: "api-key", stagingAuthentication: "subscription",
+      stagingQualification: false, unexercisedBoundaryIsFailure: true },
+  },
+  {
+    id: "finalization-recovery", label: "Preserve completed work through finalization restart", manualOnly: true,
+    description: "Crash an owned isolated server after accepted provider output, then require real workspace recovery and one final delivery without provider replay.",
+    groups: [], profiles: repositoryModelProfiles.map(({ native }) => productionDefaultHireProfile(native)),
+    environments: runnerEnvironments.filter(environment => environment.id === "daytona"), tasks: [finalizationRecoveryTask], expectedMatrixSize: 2,
+    definitionMetadata: { version: 1, definitionDigest: finalizationRecoveryDigest(), scheduling: "explicit-only", attempts: 1,
+      providerTurns: 1, budgetMonthlyCents: 1000, instructions: "production-default", fault: "owned-process-crash-after-persisted-result",
+      workspacePayloadBytes: 64 * 1024 * 1024, unexercisedFaultIsFailure: true, surface: "paperclip", target: "isolated-development-instance",
+      authentication: "api-key", stagingAuthentication: "subscription", remoteLifecycle: "per_turn", stagingQualification: false },
+  },
+  {
+    id: "necessary-question", label: "Necessary free-text question and verified confirmation", manualOnly: true,
+    description: "One required private input, a visible question and context, and one exactly bound answer continuation.",
+    groups: [], profiles: repositoryModelProfiles.map(({ native }) => productionDefaultHireProfile(native)),
+    environments: runnerEnvironments, tasks: [necessaryQuestionTask], expectedMatrixSize: 4,
+    definitionMetadata: { version: 1, definitionDigest: necessaryQuestionDigest(), scheduling: "explicit-only", attempts: 1,
+      providerTurns: "1-2; provider pause or one semantic successor", budgetMonthlyCents: 1000, instructions: "production-default",
+      surface: "paperclip", target: "isolated-development-instance", authentication: "api-key", stagingAuthentication: "subscription",
+      remoteLifecycle: "per_turn", stagingQualification: false },
+  },
+  ...([false, true] as const).map(conversion => ({
+    id: conversion ? "legacy-conversion" : "configured-repository",
+    label: conversion ? "Legacy conversion with verified delivery" : "Configured repository with verified delivery",
+    manualOnly: true, description: "Production instructions, retained configuration, and a downloaded result checked against an independent Git and file baseline.",
+    groups: [], profiles: repositoryModelProfiles.map(({ native, legacy }) => repositoryProofProfile(native, conversion ? legacy : undefined)),
+    environments: runnerEnvironments, tasks: repositoryProofTasks.filter(task => task.id === (conversion ? "convert-and-deliver" : "repository-output")), expectedMatrixSize: 4,
+    definitionMetadata: { version: 1, definitionDigest: repositoryProofDigest(), scheduling: "explicit-only", providerTurns: 1, attempts: 1,
+      budgetMonthlyCents: 1000, instructions: "production-default", surface: "paperclip", oracle: "registered-download-and-independent-configured-checkout",
+      target: "isolated-development-instance", authentication: "api-key", stagingAuthentication: "subscription", remoteLifecycle: "per_turn", stagingQualification: false },
+  })),
+  {
+    id: "automatic-repository", label: "Automatic repository continuation", manualOnly: true,
+    description: "A projectless user request stages its managed repository, continues automatically, and delivers independently verified downloaded bytes.",
+    groups: [], profiles: runnerProfiles.filter(profile => ["runner-codex", "runner-acpx-claude"].includes(profile.id))
+      .map(taskWorkspaceProfile).map(productionDefaultHireProfile),
+    environments: runnerEnvironments, tasks: [automaticRepositoryTask], expectedMatrixSize: 4,
+    definitionMetadata: { version: 1, definitionDigest: automaticRepositoryDigest(), scheduling: "explicit-only",
+      providerTurns: 2, attempts: 1, budgetMonthlyCents: 1000, project: "none", instructions: "production-default",
+      surface: "paperclip", oracle: "registered-download-and-independent-checkout", remoteLifecycle: "per_turn" },
+  },
+  {
+    id: "automatic-repository-configured-models", label: "Automatic repository with recorded staging models", manualOnly: true,
+    description: "Replay projectless setup with the recorded Codie and Claude models while keeping development authentication and lifecycle differences explicit.",
+    groups: [], profiles: repositoryModelProfiles.map(({ native }) => productionDefaultHireProfile(taskWorkspaceProfile(native))),
+    environments: runnerEnvironments, tasks: [automaticRepositoryTask], expectedMatrixSize: 4,
+    definitionMetadata: { version: 1, definitionDigest: automaticRepositoryDigest(), scheduling: "explicit-only", providerTurns: 2, attempts: 1,
+      budgetMonthlyCents: 1000, instructions: "production-default", surface: "paperclip", target: "isolated-development-instance",
+      authentication: "api-key", stagingAuthentication: "subscription", remoteLifecycle: "per_turn", stagingQualification: false },
   },
   {
     id: "pi-controls", label: "Pi active controls", manualOnly: true,
@@ -1421,7 +1518,7 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
     groups: ["native"], profiles: [...everydayProfiles,
       productionStoryProfile(runnerProfiles.find(profile => profile.id === "runner-opencode")!),
     ], environments: [localEnvironment, daytonaWarmEnvironment],
-    tasks: everydayTasks.map(task => ["hire-reuse", "delegate-feedback"].includes(task.id)
+    tasks: everydayTasks.map(task => ["hire-reuse", "delegate-feedback", "recover-controller"].includes(task.id)
       ? { ...task, automaticRetryPolicy: "single_attempt" as const } : task), expectedMatrixSize: 52,
     excludedExecutionIds: [...everydayProfiles.flatMap(profile => everydayTasks
       .filter(task => !["build-revise", "delegate-feedback", "recover-controller", "create-skill-studio"].includes(task.id))
@@ -1431,8 +1528,9 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
         ...(["hire-reuse", "delegate-feedback"].includes(task.id) ? [] : [`everyday-workflows.runner-opencode.local.${task.id}`]),
       ]),
     ],
-    definitionMetadata: { version: 7, instructions: "production", grading: "outcome-and-invariants", scheduling: "explicit-only",
-      remoteCodexRestart: "same-active-process-lease-native-prefix-and-workspace-receipt",
+    definitionMetadata: { version: 10, instructions: "production", grading: "outcome-and-invariants", scheduling: "explicit-only",
+      controllerDowntimeMs: 125_000,
+      remoteCodexRestart: "bounded-main-server-outage-receipt-empty-cache-same-active-process-and-finalization",
       procedureCases: { ids: ["hire-reuse", "delegate-feedback"], maximumAttemptsPerCell: 1, companyAndLeadBudgetCents: 1_000 } },
   },
   {
@@ -1506,6 +1604,19 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
     profiles: runnerProfiles.filter(profile => ["legacy-codex", "legacy-claude", "runner-codex", "runner-acpx-claude"].includes(profile.id)),
     environments: [localEnvironment], tasks: firstTaskTasks, expectedMatrixSize: 52,
     definitionMetadata: { version: 8, runGrading: "evidenced-nonexecution-and-refusal", credentialPersistenceCheck: false, questionChoiceMinimum: 2, nativeSetup: "qualified-platform-wizard-saved-default", claudeDefaultTargets: ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"], legacySetup: "explicit-advanced-runner-choice", productionInstructions: true, qualityGrading: "informational" },
+  },
+  {
+    id: CHAT_FEATURE_SUITE, label: "Chat feature journeys", manualOnly: true,
+    description: "Natural catalog requests create backlog work or delegate an announcement and return its saved result.",
+    groups: ["chat", "native"],
+    profiles: [chatFeatureProfile(nativeProfile({ id: "runner-codex-subscription", label: "Native Codex subscription",
+      provider: "codex", model: DEFAULT_CODEX_LOCAL_MODEL, credential: "CODEX_AUTH_JSON", supportedEnvironments: ["local"] }))],
+    environments: [localEnvironment], tasks: chatFeatureTasks, expectedMatrixSize: 2,
+    definitionMetadata: { version: 1, definitionDigest: chatFeatureDefinitionDigest, scheduling: "explicit-only",
+      instructions: "production-role-defaults", companyAndAgentBudgetCents: CHAT_FEATURE_BUDGET_CENTS,
+      unpricedUsagePolicy: "allow-through-public-budget-policy", taskRunLimits: { ceo: 3, worker: 1 },
+      maximumAttemptsPerCell: 1, setupProbeUsage: "unavailable-outside-heartbeat-accounting",
+      scenarios: chatFeatureScenarios.map(({ id, capabilities }) => ({ id, capabilities })) },
   },
   {
     id: "agent-chat", label: "Persistent Agent Chat",
@@ -1583,6 +1694,17 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
 
   },
   ...(process.env.PAPERCLIP_RUNNER_E2E_CONNECTION_REVIEWS === "1" ? [connectionReviewSuite] : []),
+  {
+    id: FEEDBACK_PERSISTENCE_SUITE, label: "Feedback Persistence", manualOnly: true,
+    description: "Real complaint and suggestion submissions, durable bodies, and retained tool receipts.",
+    groups: ["native"],
+    profiles: runnerProfiles.filter(profile => ["runner-codex", "runner-acpx-claude"].includes(profile.id)),
+    environments: runnerEnvironments, tasks: [feedbackPersistenceTask(runnerTasks.find(task => task.id === "message-marker")!)], expectedMatrixSize: 4,
+    definitionMetadata: { version: 2, owner: "runner-e2e-maintainers", scheduling: "explicit-only",
+      sourceDigest: feedbackPersistenceDigest(runnerTasks.find(task => task.id === "message-marker")!), expectedWorkRuns: 1, automaticRetryPolicy: "single_attempt",
+      budgetCents: 1_000, forecast: "unmeasured; gateway manifest required for bounded qualification",
+      grading: "retained-exact-bodies-and-run-attributed-completed-tools", feedback: "synthetic-disposable-items" },
+  },
   {
     id: "core-compatibility",
     label: "Core Runner Compatibility",
@@ -1692,8 +1814,8 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
     profiles: [nativeCompletionProfile(nativeProfile({ id: "runner-codex-subscription", label: "Native Codex subscription", provider: "codex", model: DEFAULT_CODEX_LOCAL_MODEL, credential: "CODEX_AUTH_JSON", supportedEnvironments: ["local"] })),
       ...runnerProfiles.filter(profile => profile.id === "runner-codex").map(nativeCompletionProfile)],
     environments: [localEnvironment], tasks: [caseHandoffTask, caseReceiptTask],
-    excludedExecutionIds: ["case-handoffs.runner-codex.local.same-task-roundtrip"], expectedMatrixSize: 3,
-    definitionMetadata: { version: 3,
+    expectedMatrixSize: 4,
+    definitionMetadata: { version: 4,
       definitionDigest: createHash("sha256").update(caseHandoffDefinitionDigest()).update(caseReceiptDefinitionDigest()).digest("hex"),
       scheduling: "explicit-only", maximumProviderTurns: 6, maximumAttemptsPerCell: 1,
       grading: "public-primary-task-handoff-ledger-durable-documents-and-native-tool-receipts",
@@ -1707,6 +1829,8 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
       } },
   },
   buildConnectionSuite(runnerProfiles, runnerEnvironments),
+  buildGitHubReviewJourneySuite(runnerProfiles, runnerEnvironments),
+  buildAntigravityJourneySuite(runnerEnvironments),
   {
     id: "repository-skills", label: "Repository skill packages", manualOnly: true,
     description: "Live private Poteto import and byte-for-byte delivery to local and Daytona agent runtimes.",
@@ -1782,8 +1906,8 @@ export function buildRunnerMatrix(
                 ]),
               ],
               requiredCredentials: [
-                ...(task.flow === "provider_connection" ? [] : [profile.credential]),
-                ...(task.flow !== "provider_connection" && environment.credential ? [environment.credential] : []),
+                ...(["provider_connection", "github_review_journey", "antigravity_agent_journey"].includes(task.flow) ? [] : [profile.credential]),
+                ...(!["provider_connection", "github_review_journey", "antigravity_agent_journey"].includes(task.flow) && environment.credential ? [environment.credential] : []),
                 ...(task.requiredCredentials ?? []),
               ],
             }))
@@ -1961,3 +2085,5 @@ export function runnerExecutionById(id: string): MatrixExecution {
   if (!execution) throw new Error(`Unknown runner E2E execution id: ${id}`);
   return execution;
 }
+
+export { productJourneys } from "./product-journeys/catalog.js";

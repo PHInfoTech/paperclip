@@ -1,4 +1,6 @@
+import { skillPackageStore, skillVersionMetadataColumns } from "../skill-package-store.js";
 import { skillAccessService } from "../skill-access.js";
+import { buildReviewPathRecoveryDisposition } from "../recovery/review-path-recovery.js";
 import type { AuthorizationActor } from "../authorization.js";
 import { spekoToolsForSession } from "../voice/speko-agent-tools.js";
 import { githubConfiguredInstructionSources } from "../chat-github-review-policy.js";
@@ -9,6 +11,7 @@ import { externalConversationStateSql } from "../slack-conversation-state.js";
 import { githubBotConnectionIdsForRun } from "../chat-github-tools.js";
 import { boundRunIssueIdSql } from "../run-task-binding.js";
 import { isBrowserUseConnection } from "../browser-use-client.js";
+import { restConnectorFor } from "../connectors/rest-registry.js";
 import { explicitOperatorRunIdentity } from "../run-identity.js";
 import {
   type DurableChatWakeupRequest,
@@ -228,6 +231,7 @@ const FORBIDDEN_ENV_BINDING_KEYS = new Set([
   "PAPERCLIP_AGENT_KEY_ID", "PAPERCLIP_AGENT_PUBLIC_KEY", "PAPERCLIP_AGENT_PRIVATE_KEY",
   "PAPERCLIP_RUNNER_NETWORK_ACCESS",
   "PAPERCLIP_RUNNER_NETWORK_ROOTS",
+  "PAPERCLIP_RUNNER_PREPARED_HARNESS_HOME",
   "PAPERCLIP_API_KEY",
   "PAPERCLIP_GITHUB_AUTH_MODE",
   "PAPERCLIP_GITHUB_HOST_HOME",
@@ -995,7 +999,7 @@ export async function buildPaperclipRuntimeMcpServers(input: {
     .filter(
       (connection) =>
         (connection.transport === "mcp_remote" ||
-          connection.transport === "local_stdio" || isBrowserUseConnection(connection)) &&
+          connection.transport === "local_stdio" || isBrowserUseConnection(connection) || restConnectorFor(connection)) &&
         !allInstalledConnectionIds.has(connection.id),
     )
     .map(({ id, name }) => ({ id, name }))
@@ -1021,7 +1025,7 @@ export async function buildPaperclipRuntimeMcpServers(input: {
         connection.credentialPolicy === "per_user" ||
         !isToolConnectionAttentionHealth(connection.healthStatus)) &&
       (connection.transport === "mcp_remote" ||
-        connection.transport === "local_stdio" || isBrowserUseConnection(connection) || githubBotConnectionIds.has(connection.id) || spekoConnectionIds.has(connection.id)),
+        connection.transport === "local_stdio" || isBrowserUseConnection(connection) || restConnectorFor(connection) || githubBotConnectionIds.has(connection.id) || spekoConnectionIds.has(connection.id)),
   );
   const assignedConnectionIds = new Set(
     assignedConnections.map((connection) => connection.id),
@@ -2738,12 +2742,14 @@ export async function buildPaperclipWakePayload(input: {
       : [],
     childIssueSummaryTruncated:
       input.contextSnapshot.childIssueSummaryTruncated === true,
-    dispositionRepair: input.contextSnapshot.legacyDispositionEpisode ? {
-      attempt: input.contextSnapshot.dispositionRepairAttempt,
-      maxAttempts: input.contextSnapshot.dispositionRepairMaxAttempts,
-      sourceRunId: input.contextSnapshot.retryOfRunId,
-      instruction: input.contextSnapshot.dispositionRepairInstruction,
-    } : null,
+    dispositionRepair:
+      buildReviewPathRecoveryDisposition(input.contextSnapshot) ??
+      (input.contextSnapshot.legacyDispositionEpisode ? {
+        attempt: input.contextSnapshot.dispositionRepairAttempt,
+        maxAttempts: input.contextSnapshot.dispositionRepairMaxAttempts,
+        sourceRunId: input.contextSnapshot.retryOfRunId,
+        instruction: input.contextSnapshot.dispositionRepairInstruction,
+      } : null),
     livenessContinuation:
       readNonEmptyString(input.contextSnapshot.livenessContinuationState) ||
       readNonEmptyString(
@@ -2955,7 +2961,7 @@ export function createHeartbeatRunPreparation(db: Db) {
         inputId: companySkillTestRuns.inputId,
         skillVersionId: companySkillTestRuns.skillVersionId,
         outputDocumentKey: companySkillTestRuns.outputDocumentKey,
-        fileInventory: companySkillVersions.fileInventory,
+        version: skillVersionMetadataColumns,
         revisionNumber: companySkillVersions.revisionNumber,
         label: companySkillVersions.label,
       })
@@ -2975,8 +2981,9 @@ export function createHeartbeatRunPreparation(db: Db) {
       )
       .then((rows) => rows[0] ?? null);
     if (!row) return null;
-    const fileInventory = Array.isArray(row.fileInventory)
-      ? row.fileInventory.flatMap((entry) => {
+    const savedFiles = await skillPackageStore(db).versionFiles(row.version);
+    const fileInventory = Array.isArray(savedFiles)
+      ? savedFiles.flatMap((entry) => {
           if (!entry || typeof entry !== "object" || Array.isArray(entry))
             return [];
           const record = entry as unknown as Record<string, unknown>;

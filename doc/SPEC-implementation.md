@@ -110,9 +110,9 @@ most one primary ordinary task per case and one primary case per task. Handoffs
 reuse that task, update its assignee through normal task policy, and store a free
 text phase separately from case/task status. They do not satisfy review gates.
 
-Native `create_case` requires `kickoff` and `workflow_document_text`, delegating
-to ordinary case handoff acceptance. New-case API handoffs also require workflow
-text. It is saved verbatim as ordinary task document key `workflow`, title
+Native `create_case` requires `kickoff` and exactly one of `workflowId` or
+`workflow_document_text`, delegating to ordinary case handoff acceptance.
+New-case API handoffs accept the same choice. The selected prompt is saved verbatim as ordinary task document key `workflow`, title
 `Workflow`, format `markdown`. Missing or blank text is rejected before mutation.
 Top-level `initialDocuments` belongs to first-task kickoff: normalized, unique
 task document keys, at most 20 additional documents and 200,000 total body
@@ -126,8 +126,8 @@ tools are retired; case detail and execution context roll up authorized task
 document references, omitting bodies and system keys. Historical case document
 storage and REST reads remain compatible.
 
-Starting the first new task of an existing passive case also requires workflow
-text. New-case binding may create `workflow` on the bound task with ordinary task
+Starting the first new task of an existing passive case also requires a workflow
+ID or inline workflow text. New-case binding may create `workflow` on the bound task with ordinary task
 mutation authority and create-only revision semantics; an existing key conflicts
 atomically. Later handoffs of an existing primary task omit workflow text and
 revise it through ordinary task document tools. Existing stored cases are not
@@ -138,6 +138,37 @@ defining each transition's trigger, evidence, destination agent, human wait/resu
 rules, and correction/escalation limits. State IDs match phases and named edge
 outcomes are defined in prose. No graph parser, guard interpreter or new workflow
 execution service is added.
+
+Reusable `workflows` are company-scoped definitions with a name, Markdown prompt,
+and ordinary attribution/timestamps. Cases hold an optional `workflowId`; their
+case type, facts, status and free-text phase remain independent. There are no
+workflow versions, workflow runs, state graphs, or role bindings. The task's
+`workflow` document is the effective procedure and owns its revision history.
+Editing a shared definition affects future adoptions only.
+
+Agent handoffs omit `workflowId` to preserve the relationship and document,
+supply an ID to adopt the latest prompt (including the current ID to refresh),
+or supply null to detach while retaining instructions. Acceptance snapshots the
+selected prompt, previous/next workflow IDs, names and phases, and the document's
+base revision. Transfer applies the relationship, phase and effective document
+revision in one transaction after outgoing execution settles. Intervening
+changes to the workflow document hold adoption with the existing revision
+conflict; cancel and submit new intent after reading current state. Cancelled,
+unapplied intent changes neither instructions nor workflow routing. Applied
+retries never create another document revision. Generic case updates cannot
+change workflow routing. Historical handoffs remain readable without inferred
+workflow assignments, and repeated visits are distinct handoffs. Captured names
+survive renames. Terminal completion semantics are unchanged.
+
+Company list/create and individual read/update workflow endpoints, plus native
+`list_workflows`, `read_workflow`, `create_workflow` and `update_workflow`, share
+`experimental.enableCases`. Lists and mutation receipts return metadata; prompt
+reads are on demand, using bounded native API JSON text pages. The existing
+company authorization, source-trust and run mutation fences apply. Definitions
+are company-shared; no case document is automatically published into them.
+Existing case pages and Audit show current and captured workflow names/phases,
+distinguishing pending intent from applied transitions. Authoring is API/agent
+first; there is no workflow editor or deletion lifecycle.
 
 `case_handoffs` is a durable, principal-idempotent intent/delivery ledger.
 Acceptance atomically stores the comment, links, observed revisions, audit, and
@@ -292,6 +323,15 @@ Invariants:
 - agent and manager must be in same company
 - no cycles in reporting tree
 - `terminated` agents cannot be resumed
+
+Agent configuration also has a versioned YAML representation in the Advanced
+tab, including instruction text, skills, tools, channels, permissions, secrets,
+API key operations, and revision restore. Resource saves use their owning APIs
+and expose partial failures; they are not a cross-resource transaction.
+[Agent configuration YAML](agent-configuration-yaml.md) defines its schema,
+replacement semantics, secret preservation, and revision preconditions. It uses
+the existing configuration and resource APIs, retaining their authorization
+and approval gates. Agent lifecycle commands remain separate actions.
 
 ## 7.3 `agent_api_keys`
 
@@ -724,8 +764,10 @@ V1 non-terminal liveness rule:
 
 - agent-owned `todo`, `in_progress`, `in_review`, and `blocked` issues must have a live execution path, an explicit waiting path, or an explicit recovery path
 - `in_review` is healthy only when a typed execution participant, pending issue-thread interaction or approval, user owner, active run, queued wake, or explicit recovery action owns the next action
+- A published advisory GitHub review can also remain `in_review` through an authorized external response wait or a saved monitor. Rating, CI state, and merge state alone do not create human attention. The current committed wait is an action path while its assigned endpoint and conversation remain active; it creates no Mine participation.
 - a blocked chain is covered only when each unresolved leaf issue is live or explicitly waiting
 - external waits are durable only when persisted as a bounded monitor/scheduled wake, a first-class blocker with a named owner and action, or healthy delegated child work connected by a blocker edge when the source must wait; parent/child structure alone is not a wait path
+- automatic monitor checks require an agent-owned task in `in_progress` or `in_review`; an authorized human may request one check of a retained monitor on a `blocked` task through normal admission without changing its status or bypassing dependency, recovery, ownership, pause or budget gates; provider-quota recovery monitors remain paused until the task resumes; a skipped manual dispatch returns a conflict instead of claiming success
 - unmanaged shell jobs, detached sessions, adapter child processes, local polling loops, PIDs, logs, and comments are evidence rather than liveness; a managed runtime service counts only when paired with a persisted monitor, wake, blocker, or delegated issue that owns the next check
 - heartbeat finalization evaluates liveness from persisted Paperclip state; an issue cannot remain healthy `in_progress` solely because the exiting heartbeat started a local/background watcher
 - a continuation cancelled as `issue_continuation_waiting_on_review` first converts a current typed wait target into a first-class wait; without a current target it is classified as `deliberate_wait_without_target` and gives the invokable original owner five normal-model disposition-repair attempts (immediate, then after 60, 120, 240, and 480 seconds, with up to 10 percent jitter)
@@ -858,6 +900,21 @@ including same-task retry ancestry. It does not expand inherited boundaries or
 grant privileged tools. Backlog assignments retain the existing human requester
 without starting a run. Reassignment transactionally cancels prior human requests,
 including service/plugin writes; cancelled runs cannot authorize later retries. See `doc/LOW-TRUST-PRESETS.md` for containment details.
+
+Project or repository access is a separate boundary from exact-task direction.
+A workspace project denial appears on the task with a link to the agent's
+Permissions / Trust settings. Board operators with `agents:create` can add
+same-company projects through `POST /api/agents/:id/project-access`; the operation
+locks the agent, preserves existing permissions and audits added projects.
+Saving does not retry work. The task offers explicit Retry after the required
+projects are allowed, and dispatch rechecks authorization. Readiness checks the
+task's current organizational project and selected workspace source, including
+a valid pending selection. Moving the task to an allowed project does not clear
+a retained source's access requirement. Existing setup failures with the exact
+project-boundary denial also receive the explanation on reload, without assuming
+that the task's current project caused the historical failure. A stale or
+unavailable workspace selection stays in the non-retryable failure state; it
+does not ask the user to grant project access that cannot repair the selection.
 
 Cross-issue writes are contained per heartbeat run. An agent-authored comment
 may wake the target assignee, including an explicit `resume: true` comment on a
@@ -1307,6 +1364,16 @@ Invites tab does not hide this Cloud action.
 - `DELETE /goals/:goalId` (soft delete optional, hard delete board-only)
 
 ## 10.3 Agents
+
+The Harness / Runtime configuration page offers **Upgrade runner** for existing
+legacy Claude, Codex, and Grok Build agents when the target environment selects Paperclip
+Runner by default. The action uses the normal authorized agent PATCH with
+`runner: "paperclip"`, includes pending configuration edits, and retains the
+model and compatible settings. A rejected conversion leaves saved configuration
+unchanged and identifies unsupported fields. Successful conversion records a
+configuration revision, clears incompatible session state, and preserves agent
+identity, instruction files, credentials, run policy, and run history. Existing
+agents never upgrade merely by visiting or saving unrelated configuration.
 
 The Core setup wizard creates its agent record when the user submits the agent
 name, before adapter selection, authentication, and runtime configuration.
@@ -1845,24 +1912,34 @@ Required UX behaviors:
 - conflict toasts on atomic checkout failure
 - no silent background failures; every failed run visible in UI
 
-Regular task chats and Agent Chat keep unanswered questions as compact,
-reopenable entries at their original position in the feed. Dismissing a question
-or sending a newer message clears its form from the composer without resolving
-the saved question. Questions do not contribute to composer pending counts.
-Dismissal persists locally for the person and task across reloads; reopening
-restores the original form and draft. Approval and permission gates are unchanged.
+Cold opens of ordinary tasks show the instruction and recent conversation before
+related metadata and historical run activity. Earlier messages and diagnostics
+load through **More messages**. Messages observed while the task stays open remain
+visible; deep links still load their target. Compact reads retain the full reads'
+authorization and redaction rules. Agent Chat and the classic task interface keep
+their existing history behavior.
 
-A saved ordinary question becomes historical when a newer human task message
-moves it out of the current composer. Agent context, completion feedback, and
-native finalization apply the same rule. The historical question remains pending
-and answerable, including after completion; a later human answer records history
-without reopening the task or waking its agent. Its presence alone does not
-request another answer or prevent completion. Cancellation still expires pending
-questions. Agents continue work that does not need the missing input and withdraw
-obsolete questions when later evidence satisfies them. A real current input
-blocker must identify what is still needed. Approval, permission, connection,
-and configured review gates remain active. No server-side UI dismissal record
-is required.
+Regular task chats and Agent Chat keep requests as compact, reopenable entries
+at their original position in the feed. Dismissing any composer request clears
+its form and pending reminder, including completion reviews, confirmations,
+checkbox choices, suggested tasks, item verdicts, and runtime requests. Saved
+interactions persist `dismissedAt` and `dismissedByUserId` through a board-only,
+company-scoped endpoint with task-access, resolver-audience, and current review-policy
+checks and an activity record. Review policy is checked under the task-row lock.
+Dismissal never creates an answer, decision, execution, or continuation wake.
+Raw runtime requests retain browser-local dismissal; reopening restores the
+original request and draft. A failed save leaves the request open with an error.
+
+A saved ordinary question becomes historical after a newer human task message
+or explicit human dismissal. It remains answerable after completion without
+reopening work or waking the agent. Dismissed ordinary requests, including native
+completion reviews, no longer gate task completion; completion expires their
+non-question cards through the existing lifecycle. Cancellation still expires
+all pending requests. Agents must not repeat reminders for dismissed requests.
+Tool actions, secret proposals, connection authorization, company-enforced
+resolver restrictions, document/plan approvals, and separately configured review
+stages retain their authority gates. Dismissal does not authorize their actions;
+agents continue independent work without repeating the deferred request.
 
 ## 15. Operational Requirements
 
@@ -2047,6 +2124,12 @@ for persistence, migration, rendering, and integration contracts.
 The Chat navigation entry reopens the last agent conversation visited by the current user in the current company. The browser keeps this recent order and any existing conversation ID locally; unavailable agents and removed conversations are skipped. An agent chat that has no issue yet can still reopen from the agent roster. The agent chooser remains the landing view when no saved chat is available.
 
 The server owns conversation state: `waiting` plus `in_review` denotes a healthy idle conversation, and `active` denotes an unanswered or executing turn. Successful replies settle a turn; they do not finish the issue. Idle containers are excluded from execution-work counts, ordinary task lists, timer work, and recovery invocations. Failed/unanswered turns retain normal handling. Child completion never wakes or completes the conversation. Search and direct task access preserve history.
+
+Explicit pending interactions in these conversations, including agent question forms,
+remain in the canonical attention feed under the existing company, task-read, and
+addressee checks. A conversation's idle review status or ordinary question text
+alone does not create attention. Answered forms leave pending attention and remain
+in decision history.
 
 Standalone `/new` is an ordered queue command with no model response. It advances a durable session generation and boundary comment, resets only this issue's provider context, and preserves the issue ID and history. Generation checks reject stale context writes and replies. Fresh replay excludes earlier messages and summaries. The shared transcript renders a session divider.
 
@@ -2285,7 +2368,13 @@ unavailable. Preserve current ownership and newer-work fences. See
   on their snapshot. Importing does not install dependencies or configure host tools.
 - Stage and audit complete packages before publishing. Scripts are allowed through
   the existing content audit and never run on import. Persist binary bytes and executable
-  flags in immutable version inventories (legacy entries default to UTF-8/non-executable).
+  flags in immutable package snapshots (legacy entries default to UTF-8/non-executable).
+  Compatible readers support inline and external inventories. PostgreSQL retains
+  receipts, file mappings and exact Git restore recipes; the storage backend retains
+  bytes. No package is persisted without a valid selected skill. Legacy conversion
+  is automatic and bounded. Unused Git caches can expire and reacquire the recorded
+  commit after current authorization and hash checks; authored/unproven legacy bytes
+  remain durable. See [skill package storage](skill-package-storage.md).
 - Refresh is serialized per source, checks saved selection revisions, and publishes
   valid skills plus per-entry outcomes with required activity records in one transaction.
   Failed packages retain prior versions; access/scan/download failures retain all content.
@@ -2297,8 +2386,10 @@ unavailable. Preserve current ownership and newer-work fences. See
 - Runtime version directories are disposable caches. An hourly, bounded sweep may
   evict non-current copies unused for one hour, preserving active and unresolved
   execution pins. Selection, materialization, and pin persistence serialize with
-  eviction across processes. Missing copies rebuild from immutable database bytes
-  without upstream access. See [recoverable disk cleanup](recoverable-disk-cleanup.md)
+  eviction across processes. Missing copies rebuild from immutable stored packages
+  or legacy database bytes without upstream access. Warm preparation uses manifests
+  and file identities, avoids repository-content SQL/object reads, and does not
+  reconcile unrelated library entries for known selected repository skills. See [recoverable disk cleanup](recoverable-disk-cleanup.md)
   for rollout controls, legacy grace periods, and interrupted cleanup recovery.
 - Manually selected sources retain reviewed selection, with new candidates checked by default and
   explicit folder exclusions retained. Upstream deletion keeps installed content with
@@ -2545,3 +2636,30 @@ Company-managed [Prompt Injection Prevention](prompt-injection-prevention.md)
 optionally classifies existing tool-result boundaries through a shared OpenRouter
 connection. Settings → Connections is permanent; valid model verdicts take
 precedence and dependency failures use the original built-in detector.
+
+
+### Personal experimental workspace preference
+
+Settings → Experimental can opt the current human into the Coordinator workspace.
+The choice defaults off and is saved per user across companies on an instance in
+`user_workspace_preferences`; it is not an instance feature or a company capability.
+Turning it off restores the classic shell without modifying canonical tasks, agents,
+artifacts, permissions, or runs. Local-trusted development uses the existing shared
+`local-board` identity, explicitly identified in Settings. Anonymous and agent actors
+cannot read or update this personal choice.
+
+`GET /api/workspace-preferences/me` reads only the caller's choice.
+`PUT /api/companies/{companyId}/workspace-preferences/me` updates it with authorized
+company audit context; active viewers may update their own presentation. The preference
+and sparse audit event commit atomically. Client caches are keyed by human identity,
+and switching waits for successful persistence; unavailable preferences fall back to
+the classic shell. This preference does not replace `enableClassicTaskInterface`.
+## Agent connection administration (2026-10-13)
+
+Standard agents can configure connections through the same domain APIs used by the app, bounded by their grants and their responsible user's current authority. Fresh standard agents for default Operators can manage app/tool connections, chat/email channels, AI accounts and pools, profiles and gateways without additional grants. Existing grants are not backfilled; explicit restrictions persist. Gateway administration retains the responsible human's administrative permission and does not grant agents blanket `tools:admin`.
+
+The agent performs authorized setup, reuses saved accounts and drafts, and hands off only required human authentication, consent, credential entry or identity confirmation. Saved handoffs resume through existing task continuation after current authority is rechecked. Management, tool execution and approval remain separate. Private accounts, host commands and stored credentials retain their boundaries; agent-issued gateway clients preserve issuer and responsible-user restrictions at use time.
+
+Authorized policy administration includes user-requested changes that loosen the acting agent’s own tool controls. These writes remain bounded by management grants, resource scope and the responsible user’s current authority; they do not need an additional approval solely because the agent is a target. Subsequent tool calls obey the resulting policy. Agents cannot approve their own governed action requests or edit their own principal permission grants.
+
+The implementation, operation inventory, permission matrix and fixture qualification are recorded in [Agent API parity for connection configuration](plans/2026-10-13-connection-api-parity.md). Provider fixtures establish API behavior; they do not constitute live provider setup or an empirical agent-success claim.

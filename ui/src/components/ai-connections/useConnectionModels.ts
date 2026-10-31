@@ -4,7 +4,7 @@ import { aiConnectionsApi } from "@/api/ai-connections";
 import { agentsApi } from "@/api/agents";
 import { queryKeys } from "@/lib/queryKeys";
 
-export function useConnectionModels(
+export function useConnectionModelsState(
   companyId: string | null | undefined,
   binding: AiConnectionBinding | undefined,
   harness: string,
@@ -45,12 +45,12 @@ export function useConnectionModels(
     ? { kind: "openrouter", protocol: "chat", auth: "bearer", models: [] }
     : undefined);
   const modelOptions = discover
-    ? (catalog.data ?? []).map((m) => ({ ...m, id: harness === "opencode_local" ? m.id : m.id.replace(/^openrouter\//, "") }))
+    ? (catalog.data ?? []).map((m) => ({ ...m, id: ["opencode_local", "pi_local"].includes(harness) ? m.id : m.id.replace(/^openrouter\//, "") }))
     : endpoint
       ? [...new Map([...routing.models, ...(listed.data ?? [])].map((m) => [m.id, m])).values()]
       : routing?.models ?? [];
   const query = discover ? catalog : endpoint ? listed : undefined;
-  return effectiveRouting
+  const connectionModels = effectiveRouting
     ? {
         models: modelOptions.map((m) => ({
           id: aiRoutingModel(effectiveRouting, harness, m.id),
@@ -65,4 +65,19 @@ export function useConnectionModels(
           aiRoutingModel(effectiveRouting, harness, model),
       }
     : undefined;
+  return {
+    connectionModels,
+    loading: accounts.isLoading,
+    refreshing: accounts.isFetching,
+    error: accounts.error,
+    refresh: async () => { await accounts.refetch(); },
+  };
+}
+
+export function useConnectionModels(
+  companyId: string | null | undefined,
+  binding: AiConnectionBinding | undefined,
+  harness: string,
+) {
+  return useConnectionModelsState(companyId, binding, harness).connectionModels;
 }

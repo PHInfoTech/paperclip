@@ -118,6 +118,16 @@ describe.skipIf(!support.supported)("heartbeat runtime execution boundary", () =
     expect(input.instructions.releaseInstructionCopy).toHaveBeenCalledOnce();
   }
 
+  it("passes preparation renewal ownership to native dispatch", async () => {
+    const { input } = await fixture(true);
+    const acquired = vi.fn(async () => undefined);
+    input.runtime.runOptions.onNativeExecutionLeaseAcquired = acquired;
+    await executeHeartbeatRuntime(db, input);
+    expect(executePaperclipNativeSession).toHaveBeenCalledWith(expect.objectContaining({ onExecutionLeaseAcquired: acquired }));
+    // Preparation is still protected until the native executor claims its lease.
+    expect(acquired).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("preserves the dispatch gate's early return and cleanup (native: %s)", async native => {
     const { input, adapter } = await fixture(native);
     input.control.dispatchResolvedInteractionContinuationWithAtomicGate = async () => ({ dispatched: false });
@@ -209,7 +219,7 @@ describe.skipIf(!support.supported)("heartbeat runtime execution boundary", () =
       name: "Plugin worktree", providerType: "plugin", providerRef: "provider:opaque-worktree", cwd: "/workspaces/plugin-only",
       mode: "isolated_workspace", strategyType: "git_worktree", branchName: "task-branch" }).returning();
     input.workspace.persistedExecutionWorkspace = workspace;
-    const inspect = vi.spyOn(pluginWorkspaces, "inspectPluginWorkspace").mockResolvedValue({ kind: "inspection",
+    const inspect = vi.spyOn(pluginWorkspaces, "finalizePluginWorkspace").mockResolvedValue({ kind: "inspection",
       branchName: branch === "expected" ? "task-branch" : "other-branch", headSha: "a".repeat(40),
       hasDirtyTrackedFiles: true, hasUntrackedFiles: false, hasLocalOnlyData: true, isMergedIntoBase: false, remotelyRecoverable: false });
     try {
@@ -221,7 +231,7 @@ describe.skipIf(!support.supported)("heartbeat runtime execution boundary", () =
         await expect(result).rejects.toThrow("plugin_workspace_branch_mismatch");
         expect((await finalizations()).some(row => row.status === "succeeded")).toBe(false);
       }
-      expect(inspect).toHaveBeenCalledWith(db, undefined, expect.objectContaining({ id: workspace.id, providerRef: workspace.providerRef }));
+      expect(inspect).toHaveBeenCalledWith(db, undefined, expect.objectContaining({ id: workspace.id, providerRef: workspace.providerRef }), { agentId: input.agent.id, runId: input.run.id });
     } finally { inspect.mockRestore(); }
   });
 

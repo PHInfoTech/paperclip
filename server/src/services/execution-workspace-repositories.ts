@@ -134,7 +134,7 @@ export function executionWorkspaceRepositoryService(db: Db) {
     let localTrusted = input.actor.source === "local_implicit";
     if (input.actor.type === "agent") {
       if (input.actor.source !== "agent_jwt" || !input.actor.agentId || !input.actor.runId || input.actor.companyId !== input.companyId) throw forbidden("Repository preparation requires an authenticated task run");
-      const identity = await captureRunIdentity(db, { companyId: input.companyId, agentId: input.actor.agentId, runId: input.actor.runId });
+      const identity = await captureRunIdentity(db, { companyId: input.companyId, agentId: input.actor.agentId, runId: input.actor.runId }, { readScope: "task_authorization" });
       const runIssueId = identity.run.nativeIssueId ?? identity.run.contextSnapshot?.issueId;
       if (runIssueId !== input.issueId) throw forbidden("Repository preparation is scoped to the current task");
       userId = identity.run.responsibleUserId;
@@ -319,7 +319,7 @@ export function executionWorkspaceRepositoryService(db: Db) {
     return candidatePin;
   }
   async function prepareForAdmission(input: { companyId: string; issueId: string; workspaceId: string; cwd: string; agentId: string; runId: string; responsibleUserId: string | null }) {
-    const { acquisitionRestricted } = await publicationBinding(db, input, false);
+    const { acquisitionRestricted, workspace } = await publicationBinding(db, input, false);
     const rows = await list(input.companyId, input.workspaceId);
     if (!rows.length) return [];
     await publicationBinding(db, input);
@@ -362,7 +362,11 @@ export function executionWorkspaceRepositoryService(db: Db) {
           await fs.writeFile(ignoreTemporary, "*\n", { flag: "wx", mode: 0o600 });
           await fs.rename(ignoreTemporary, ignorePath);
         } finally { await fs.rm(ignoreTemporary, { force: true }); }
-        await measureRunPhase("workspace.repository.ignore_rules", () => ensureManagedRepositoriesIgnored(root));
+        await measureRunPhase("workspace.repository.ignore_rules", () => ensureManagedRepositoriesIgnored(root, {
+          plainTaskDirectory: workspace.strategyType === "project_primary" && workspace.metadata?.source === "task_session"
+            && workspace.sourceIssueId === input.issueId && ["shared_workspace", "isolated_workspace"].includes(workspace.mode)
+            && !workspace.repoUrl && !workspace.projectId && !workspace.projectWorkspaceId,
+        }));
       }
       return stagingParent;
     });

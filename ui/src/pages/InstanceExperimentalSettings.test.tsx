@@ -22,6 +22,8 @@ vi.mock("@/api/instanceSettings", () => ({
   instanceSettingsApi: mockInstanceSettingsApi,
 }));
 
+vi.mock("@/components/CoordinatorWorkspaceSetting", () => ({ CoordinatorWorkspaceSetting: () => null }));
+
 vi.mock("@/context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompany: { id: "butter", issuePrefix: "BUT" } }),
 }));
@@ -92,9 +94,11 @@ function defaultExperimentalSettings(): InstanceExperimentalSettingsPayload {
     enableChatConnectors: false,
     enableGitHubReviewBots: false,
     enableMemoryConnectors: false,
+    enablePaperclipNotebook: false,
     enableCases: false,
     enableAgentChat: false,
     enableCombinedInboxTasks: false,
+    enableArtifactsV1: false,
     enableConferenceRoomChat: false,
     enableClassicTaskInterface: false,
     enableIssuePlanDecompositions: false,
@@ -1145,6 +1149,20 @@ describe("InstanceExperimentalSettings — operator-hidden cards", () => {
     expect(container.textContent).toContain("Experimental features");
     expect(container.textContent).not.toContain("AI connection routers");
     expect(container.querySelector('button[aria-label="Toggle AI connection routers experimental setting"]')).toBeNull();
+    expect(mockInstanceSettingsApi.updateExperimental).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { enabled: false, developerMode: false }, { enabled: true, developerMode: false },
+    { enabled: false, developerMode: true }, { enabled: true, developerMode: true },
+  ])("never offers a Notebook control with enabled=$enabled and developerMode=$developerMode", async ({ enabled, developerMode }) => {
+    await renderPage(undefined, { ...defaultExperimentalSettings(), enablePaperclipNotebook: enabled,
+      enablePaperclipDeveloperMode: developerMode,
+      managedKeys: { enablePaperclipNotebook: { managed: true, managedBy: "paperclip-cloud" } },
+    });
+    expect(container.textContent).toContain("Experimental features");
+    expect(container.textContent).not.toContain("Paperclip Notebook");
+    expect(container.querySelector('button[aria-label="Toggle Paperclip Notebook experimental setting"]')).toBeNull();
     expect(mockInstanceSettingsApi.updateExperimental).not.toHaveBeenCalled();
   });
 

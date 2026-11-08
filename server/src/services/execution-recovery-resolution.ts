@@ -6,7 +6,7 @@ import { notifyExecutionRunWork } from "./execution-control-notifications.js";
 import { hasWorkspaceRestoreFailure } from "@paperclipai/shared";
 import { randomUUID } from "node:crypto";
 import { canonicalExecutionUuid } from "./execution-identity.js";
-import { claimedAdapterType, conversationRecoveryActionPredicate, getConversationOwnershipBlocker } from "./conversation-continuation.js";
+import { claimedAdapterType, conversationRecoveryActionPredicate, CONVERSATION_HOLD_FOLD_EVIDENCE_KEY, getConversationOwnershipBlocker } from "./conversation-continuation.js";
 import { persistActivity } from "./activity-log.js";
 import { appendHeartbeatRunEvent } from "./heartbeat-run-events.js";
 import { logger } from "../middleware/logger.js";
@@ -462,9 +462,12 @@ export async function settleUnrecoverableExecutions(
         resolutionNote: "Conversation continuation does not replay prior tool calls.",
         wakePolicy: null,
         monitorPolicy: null,
-        evidence: sql`case when ${issueRecoveryActions.evidence} ? 'automaticRecovery'
+        // The receipt names this exact run so stranded-work sweeps keep the
+        // decision instead of reopening an identical hold on every pass.
+        evidence: sql`(case when ${issueRecoveryActions.evidence} ? 'automaticRecovery'
           then jsonb_set(${issueRecoveryActions.evidence}, '{automaticRecovery,replay}', '"conversation_continuation"'::jsonb)
-          else ${issueRecoveryActions.evidence} end`,
+          else ${issueRecoveryActions.evidence} end) || jsonb_build_object(${CONVERSATION_HOLD_FOLD_EVIDENCE_KEY}::text,
+            jsonb_build_object('runId', ${issueRecoveryActions.evidence}->'runId', 'foldedAt', ${now.toISOString()}::text))`,
       }).where(and(obsoleteConversationHold, eq(issueRecoveryActions.id, candidate.id))).returning();
       if (!action) continue;
       await persistActivity(tx as unknown as Db, {

@@ -18,6 +18,11 @@ export function isConversationAdapter(adapterType: string): boolean {
 
 export const CONVERSATION_CONTINUATION_POLICY = "continue_conversation_v1";
 
+/** Recovery-action evidence key recording that a conversation hold for this
+ * exact run was folded. It is the run's recorded decision: the next turn comes
+ * from a new message, so stranded-work sweeps must not open another hold. */
+export const CONVERSATION_HOLD_FOLD_EVIDENCE_KEY = "conversationContinuationFold";
+
 export function hasConversationContinuationPolicy(result: Record<string, unknown> | null | undefined): boolean {
   return result?.workspaceRestoreFailure !== "restore_unsafe_archive" && !hasRequiredWorkspaceRecovery(result) && result?.conversationContinuation === CONVERSATION_CONTINUATION_POLICY;
 }

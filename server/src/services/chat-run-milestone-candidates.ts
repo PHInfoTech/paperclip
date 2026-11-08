@@ -29,7 +29,13 @@ export function chatRunMilestoneSource(since: Date) {
         ${heartbeatRuns.nativeIssueId}, ${heartbeatRuns.issueId},
         ${heartbeatRuns.contextSnapshot}, ${heartbeatRuns.resultJson}
       from ${heartbeatRuns}
-      where ${heartbeatRuns.updatedAt} >= ${since.toISOString()}
+      -- Uncorrelated, so PostgreSQL evaluates it once as a one-time filter and
+      -- skips the run scan entirely while no conversation can receive a milestone.
+      where exists (
+          select 1 from ${chatConversations}
+          where ${chatConversations.state} in ('active', 'waiting')
+        )
+        and ${heartbeatRuns.updatedAt} >= ${since.toISOString()}
         and exists (
           select 1 from ${chatConversations}
           where ${chatConversations.companyId} = ${heartbeatRuns.companyId}

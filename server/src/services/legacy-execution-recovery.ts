@@ -8,7 +8,7 @@ import { isPreDispatchReviewWaitVerified } from "./pre-dispatch-review-wait.js";
 import { isPreDispatchExecutionWaitVerified } from "./pre-dispatch-execution-wait.js";
 import { hasWorkspaceRestoreFailure } from "@paperclipai/shared";
 import { normalizeMaxTurnStopReason } from "./heartbeat-stop-metadata.js";
-import { claimedAdapterType, hasConversationContinuationPolicy } from "./conversation-continuation.js";
+import { claimedAdapterType, CONVERSATION_HOLD_FOLD_EVIDENCE_KEY, hasConversationContinuationPolicy } from "./conversation-continuation.js";
 import { canonicalExecutionUuid } from "./execution-identity.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, getTableColumns, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
@@ -240,6 +240,8 @@ export async function terminalizeLegacyExecution(input: {
       // its recorded decision instead of creating another hold. The explicit
       // receipt must identify an actual successor under the same task/agent;
       // retained user intent remains authoritative after that successor finishes.
+      // A folded conversation hold is also a recorded decision for this run:
+      // the conversation continues from a new message, never from a replay.
       const [reconciled] = await tx.select({ id: issueRecoveryActions.id })
         .from(issueRecoveryActions).where(and(
           eq(issueRecoveryActions.companyId, run.companyId),
@@ -249,6 +251,11 @@ export async function terminalizeLegacyExecution(input: {
             sql`${issueRecoveryActions.evidence}->'workspaceRestoreRecovery'->>'schema' = ${LEGACY_WORKSPACE_RECOVERY_SCHEMA}`,
           ] : []),
           or(
+            and(
+              eq(issueRecoveryActions.cause, LEGACY_RECOVERY_CAUSE),
+              eq(issueRecoveryActions.outcome, "cancelled"),
+              sql`${issueRecoveryActions.evidence}->'${sql.raw(CONVERSATION_HOLD_FOLD_EVIDENCE_KEY)}'->>'runId' = ${run.id}`,
+            ),
             sql`${issueRecoveryActions.evidence}->'executionReconciliation'->>'runId' = ${run.id}`,
             and(
               sql`${issueRecoveryActions.evidence}->>'runId' = ${run.id}`,

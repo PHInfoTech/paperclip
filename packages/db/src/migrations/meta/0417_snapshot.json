@@ -1,6 +1,6 @@
 {
-  "id": "3b8bb508-028d-4154-abdd-af870f1f3ca6",
-  "prevId": "ff56ee93-8cfc-465a-b26a-1c12d10773ff",
+  "id": "ef296dcd-5a92-4823-ade6-826f8e3255a6",
+  "prevId": "bbaeecd8-ff3f-4e70-a069-291bf3dc97bb",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1341,6 +1341,39 @@
             },
             {
               "expression": "entity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_log_company_entity_created_idx": {
+          "name": "activity_log_company_entity_created_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -19046,7 +19079,46 @@
           "name": "file_inventory",
           "type": "jsonb",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "storage": {
+          "name": "storage",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "upload": {
+          "name": "upload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "restore": {
+          "name": "restore",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "migration_at": {
+          "name": "migration_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "maintenance_at": {
+          "name": "maintenance_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "restore_retry_at": {
+          "name": "restore_retry_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -19074,6 +19146,38 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "company_skill_snapshots_migration_idx": {
+          "name": "company_skill_snapshots_migration_idx",
+          "columns": [
+            {
+              "expression": "migration_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"company_skill_repository_snapshots\".\"migration_at\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "company_skill_snapshots_maintenance_idx": {
+          "name": "company_skill_snapshots_maintenance_idx",
+          "columns": [
+            {
+              "expression": "maintenance_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"company_skill_repository_snapshots\".\"maintenance_at\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -19966,6 +20070,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "package_snapshot_id": {
+          "name": "package_snapshot_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "package_file_map": {
+          "name": "package_file_map",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "migration_at": {
+          "name": "migration_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
         "revision_number": {
           "name": "revision_number",
           "type": "integer",
@@ -20024,6 +20147,52 @@
         }
       },
       "indexes": {
+        "company_skill_versions_migration_idx": {
+          "name": "company_skill_versions_migration_idx",
+          "columns": [
+            {
+              "expression": "migration_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"company_skill_versions\".\"migration_at\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "company_skill_versions_package_snapshot_idx": {
+          "name": "company_skill_versions_package_snapshot_idx",
+          "columns": [
+            {
+              "expression": "package_snapshot_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "company_skill_versions_repository_snapshot_idx": {
+          "name": "company_skill_versions_repository_snapshot_idx",
+          "columns": [
+            {
+              "expression": "repository_snapshot_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "company_skill_versions_skill_revision_idx": {
           "name": "company_skill_versions_skill_revision_idx",
           "columns": [
@@ -20128,6 +20297,19 @@
           "tableTo": "company_skill_repository_snapshots",
           "columnsFrom": [
             "repository_snapshot_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "company_skill_versions_package_snapshot_id_company_skill_repository_snapshots_id_fk": {
+          "name": "company_skill_versions_package_snapshot_id_company_skill_repository_snapshots_id_fk",
+          "tableFrom": "company_skill_versions",
+          "tableTo": "company_skill_repository_snapshots",
+          "columnsFrom": [
+            "package_snapshot_id"
           ],
           "columnsTo": [
             "id"
@@ -20574,6 +20756,78 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.skill_package_deletions": {
+      "name": "skill_package_deletions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "archive_key": {
+          "name": "archive_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manifest_key": {
+          "name": "manifest_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delete_after": {
+          "name": "delete_after",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "skill_package_deletions_due_idx": {
+          "name": "skill_package_deletions_due_idx",
+          "columns": [
+            {
+              "expression": "delete_after",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -33816,7 +34070,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"heartbeat_runs\".\"runtime_mode\" = 'native' AND \"heartbeat_runs\".\"status\" = 'cancelled'\n        AND \"heartbeat_runs\".\"runner_profile_json\"->'nativeWorkspaceSync'->>'state' = 'prepared'\n        AND \"heartbeat_runs\".\"result_json\"->'nativeCancellation'->>'dispatchState' = 'acknowledged'\n        AND (\"heartbeat_runs\".\"result_json\"->'workspaceRestoreRecovery'->>'schema' = 'paperclip.workspace-restore-recovery.v1'\n          AND \"heartbeat_runs\".\"result_json\"->>'workspaceRestoreFailure' IN ('restore_permission_denied', 'restore_lock_timeout', 'restore_unsafe_archive', 'restore_failed')) IS NOT TRUE",
+          "where": "\"heartbeat_runs\".\"runtime_mode\" = 'native' AND \"heartbeat_runs\".\"status\" = 'cancelled'\n        AND \"heartbeat_runs\".\"runner_profile_json\"->'nativeWorkspaceSync'->>'state' = 'prepared'\n        AND \"heartbeat_runs\".\"result_json\"->'nativeCancellation'->>'dispatchState' = 'acknowledged'\n        AND (\"heartbeat_runs\".\"result_json\"->'workspaceRestoreRecovery'->>'schema' = 'paperclip.workspace-restore-recovery.v1'\n          AND \"heartbeat_runs\".\"result_json\"->>'workspaceRestoreFailure' IN ('restore_permission_denied', 'restore_lock_timeout', 'restore_unsafe_archive', 'restore_invalid_metadata', 'restore_failed')) IS NOT TRUE",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -33871,6 +34125,21 @@
           ],
           "isUnique": false,
           "where": "\"heartbeat_runs\".\"cost_accounting_pending\" = true",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "heartbeat_runs_updated_at_idx": {
+          "name": "heartbeat_runs_updated_at_idx",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -36499,6 +36768,40 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "issue_comments_review_response_receipt_idx": {
+          "name": "issue_comments_review_response_receipt_idx",
+          "columns": [
+            {
+              "expression": "created_by_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "issue_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "author_agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"issue_comments\".\"author_type\" = 'agent' AND \"issue_comments\".\"metadata\"->>'authorizationReason' = 'allow_chat_run_presentation'",
           "concurrently": false,
           "method": "btree",
           "with": {}

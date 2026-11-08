@@ -892,6 +892,45 @@ const support = await getEmbeddedPostgresTestSupport();
       if (!scenario.ordinary) expect(after.conversationSessionGeneration).toBe(scenario.generation);
     });
 
+    it("keeps a folded conversation hold settled across repeated stranded-work sweeps", async () => {
+      const chat = await create();
+      await db.update(issues).set({
+        status: "in_progress", conversationState: "active", conversationSessionGeneration: 1,
+      }).where(eq(issues.id, chat.id));
+      const interrupted = async () => {
+        const run = await runFor(chat.id, randomUUID(), { conversationSessionGeneration: 1 });
+        await db.update(heartbeatRuns).set({
+          runnerProfileJson: { adapterDispatch: { adapterType: "claude_local" } },
+        }).where(eq(heartbeatRuns.id, run.id));
+        return (await terminalizeLegacyExecution({
+          db, run: { ...run, runnerProfileJson: { adapterDispatch: { adapterType: "claude_local" } } },
+          status: "interrupted", patch: { errorCode: "lease_released_before_terminal", finishedAt: new Date() },
+        }))!;
+      };
+      const holdsFor = (runId: string) => db.select().from(issueRecoveryActions).where(and(
+        eq(issueRecoveryActions.sourceIssueId, chat.id), eq(issueRecoveryActions.fingerprint, `legacy-execution:${runId}`),
+      ));
+      const run = await interrupted();
+      expect(await holdsFor(run.id)).toMatchObject([{ status: "active", cause: LEGACY_RECOVERY_CAUSE }]);
+
+      await settleUnrecoverableExecutions(db);
+      const [folded] = await holdsFor(run.id);
+      expect(folded).toMatchObject({ status: "resolved", outcome: "cancelled" });
+      expect(folded!.evidence.conversationContinuationFold).toMatchObject({ runId: run.id });
+
+      // Stranded-work sweeps revisit the same terminal run. Before the fold
+      // receipt, each pass opened a new hold that the next settle cancelled.
+      for (let pass = 0; pass < 3; pass += 1) {
+        await terminalizeLegacyExecution({ db, run, status: run.status, fromStatuses: [run.status] });
+        await settleUnrecoverableExecutions(db);
+      }
+      expect(await holdsFor(run.id)).toHaveLength(1);
+
+      // The receipt belongs to that run only; a later interrupted turn is still held.
+      const later = await interrupted();
+      expect(await holdsFor(later.id)).toMatchObject([{ status: "active" }]);
+    });
+
     it.each(["answered", "new-message", "response-less", "failed", "stale-session", "failed-gap", "missing-gap"])("settles a historical question using completed conversation progress (%s)", async scenario => {
       const chat = await create();
       const svc = issueService(db);

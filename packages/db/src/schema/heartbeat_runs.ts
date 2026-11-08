@@ -141,6 +141,8 @@ export const heartbeatRuns = pgTable(
     scheduledRetryCancellationIdx: index("heartbeat_runs_scheduled_retry_cancellation_idx").on(table.id)
       .where(sql`${table.status} = 'scheduled_retry' and jsonb_typeof(${table.resultJson}->'startupCancellation') = 'object'`),
     costAccountingPendingIdx: index("heartbeat_runs_cost_accounting_pending_idx").on(table.updatedAt, table.id).where(sql`${table.costAccountingPending} = true`),
+    // Chat milestone projection reads runs changed within its recent window.
+    updatedAtIdx: index("heartbeat_runs_updated_at_idx").on(table.updatedAt),
     costDataQualityIdx: index("heartbeat_runs_cost_data_quality_idx")
       .on(table.companyId, sql`coalesce(${table.finishedAt}, ${table.createdAt}) desc`, table.id)
       .where(sql`${table.costAccountingPending} = true and ${table.status} in ('succeeded','failed','timed_out','cancelled','interrupted')`),

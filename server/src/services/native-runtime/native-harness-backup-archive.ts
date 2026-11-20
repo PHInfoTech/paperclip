@@ -74,6 +74,11 @@ export async function captureNativeHarnessArchive(root: string, target: string, 
           const before = await readNativeHarnessBackupSourceInput(() => handle.stat());
           if (!before.isFile() || before.ino !== stat.ino || before.dev !== stat.dev || before.size !== stat.size) throw fail();
           const stream = archive.entry({ name: entry, size: stat.size, type: "file", mode: stat.mode & 0o777 });
+          // Destroying the pack (an aborted or timed-out capture) destroys this
+          // entry after its pipeline settles; without a listener that late
+          // 'error' is unhandled and takes the whole server down. The failure
+          // still reaches the caller through the pipelines.
+          stream.on("error", () => {});
           await pipeline(handle.createReadStream({ autoClose: false }), stream, { signal });
           const after = await readNativeHarnessBackupSourceInput(() => handle.stat());
           if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw fail();

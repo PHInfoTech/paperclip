@@ -1678,8 +1678,8 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
 
   it("leaves archived connections out of the selectable list", async () => {
     // Routed (gateway) connections never set a personal default, so this does not disturb other tests.
-    const base = { provider: "openai", method: "api_key", ownership: "personal", allAgents: true, agentIds: [] } as const;
-    const routing = (host: string) => ({ kind: "gateway", protocol: "chat", auth: "bearer", baseUrl: `https://${host}.example/v1`, models: [{ id: "m" }] }) as const;
+    const base = { provider: "openai" as const, method: "api_key" as const, ownership: "personal" as const, allAgents: true, agentIds: [] as string[] };
+    const routing = (host: string) => ({ kind: "gateway" as const, protocol: "chat" as const, auth: "bearer" as const, baseUrl: `https://${host}.example/v1`, models: [{ id: "m" }] });
     const kept = await service.save(companyId, "alice", { ...base, name: "Archived list kept", routing: { ...routing("list-kept"), models: [{ id: "m" }] } }, "kept-credential");
     const removed = await service.save(companyId, "alice", { ...base, name: "Archived list removed", routing: { ...routing("list-removed"), models: [{ id: "m" }] } }, "removed-credential");
     await db.update(toolConnections).set({ status: "archived", enabled: false }).where(eq(toolConnections.id, removed.connectionId));
@@ -1691,8 +1691,8 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
   });
 
   it("makes a provider application visible again when a new connection reuses an archived one", async () => {
-    const routing = { kind: "gateway", protocol: "chat", auth: "bearer", baseUrl: "https://archived-app.example/v1", models: [{ id: "archived-app-model" }] } as const;
-    const input = { provider: "openai", method: "api_key", ownership: "shared", allAgents: true, agentIds: [], routing: { ...routing, models: [...routing.models] } } as const;
+    const routing = { kind: "gateway" as const, protocol: "chat" as const, auth: "bearer" as const, baseUrl: "https://archived-app.example/v1", models: [{ id: "archived-app-model" }] };
+    const input = { provider: "openai" as const, method: "api_key" as const, ownership: "shared" as const, allAgents: true, agentIds: [] as string[], routing: { ...routing, models: [...routing.models] } };
     const first = await service.save(companyId, "alice", { ...input, name: "Archived app first", routing: { ...input.routing } }, "first-credential");
     const [firstStored] = await db.select().from(toolConnections).where(eq(toolConnections.id, first.connectionId));
     // Archiving the last connection of a provider archives its application too.

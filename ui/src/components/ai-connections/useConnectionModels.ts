@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { aiRoutingModel, type AiConnectionBinding, type AiProviderRouting } from "@paperclipai/shared";
 import { aiConnectionsApi } from "@/api/ai-connections";
 import { agentsApi } from "@/api/agents";
+import { useQueryView } from "@/components/QueryView";
 import { queryKeys } from "@/lib/queryKeys";
 
 export function useConnectionModelsState(
@@ -30,7 +31,6 @@ export function useConnectionModelsState(
     queryFn: () => agentsApi.adapterModels(companyId!, "opencode_local", { provider: "openrouter" }),
     enabled: Boolean(companyId && discover),
     staleTime: 60_000,
-    retry: false,
   });
   // Custom gateways and local endpoints list their own models; saved IDs come first.
   const endpoint = routing?.kind === "gateway" || routing?.kind === "local";
@@ -41,6 +41,7 @@ export function useConnectionModelsState(
     staleTime: 60_000,
     retry: false,
   });
+  const catalogView = useQueryView(catalog);
   const effectiveRouting: AiProviderRouting | undefined = routing ?? (openRouter
     ? { kind: "openrouter", protocol: "chat", auth: "bearer", models: [] }
     : undefined);
@@ -56,9 +57,13 @@ export function useConnectionModelsState(
           id: aiRoutingModel(effectiveRouting, harness, m.id),
           label: m.label ?? m.id,
         })),
-        isLoading: Boolean(query?.isLoading),
+        isLoading: discover
+          ? catalog.isLoading || catalogView.kind === "reconnecting"
+          : Boolean(query?.isLoading),
         // Saved IDs still work when the endpoint cannot list its models.
-        error: query && (discover || !routing?.models.length) ? query.error : null,
+        error: discover
+          ? (catalogView.kind === "error" ? catalog.error : null)
+          : query && !routing?.models.length ? query.error : null,
         refreshing: Boolean(query?.isFetching),
         refreshModels: query ? async () => { await query.refetch(); } : undefined,
         resolveModel: (model: string) =>

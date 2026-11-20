@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Project, ProjectRepository } from "@paperclipai/shared";
 import { projectsApi } from "@/api/projects";
+import { describeError } from "@/api/errors";
 import { queryKeys } from "@/lib/queryKeys";
 import { ConnectionSetupFlow } from "@/features/connections/ConnectionSetupFlow";
 import { ProjectRepositoryInput, repositoryOptionsKey } from "./ProjectRepositoryInput";
@@ -35,7 +36,7 @@ export function ProjectRepositories({ project }: { project: Project }) {
     {project.workspaces.filter((workspace) => workspace.repoUrl && !workspace.metadata?.githubRepositoryId).map((workspace) => <LegacyProjectRepository key={workspace.id} workspace={workspace} projectRef={project.urlKey} />)}
     {!project.workspaces.some((workspace) => workspace.repoUrl) && <ProjectGitRepository project={project} />}
     <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
-      {save.isError && <p role="alert" className="mr-auto text-sm text-destructive">{save.error.message}</p>}
+      {save.status === "error" && <p role="alert" className="mr-auto text-sm text-destructive">{describeError(save.error).body}</p>}
       {save.isSuccess && <span role="status" className="mr-auto text-sm text-muted-foreground">Changes saved</span>}
       {draft && <Button type="button" variant="ghost" disabled={save.isPending} onClick={() => { setDraft(null); save.reset(); }}>Discard changes</Button>}
       <Button type="button" disabled={!draft || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Saving…" : "Save changes"}</Button>

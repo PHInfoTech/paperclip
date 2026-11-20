@@ -16,6 +16,7 @@ import {
   ensureAdapterExecutionTargetCommandResolvable,
   maybeRunSandboxInstallCommand,
   ensureAdapterExecutionTargetDirectory,
+  isAdapterExecutionTargetUnavailableError,
   runAdapterExecutionTargetProcess,
   describeAdapterExecutionTarget,
   resolveAdapterExecutionTargetCwd,
@@ -128,6 +129,7 @@ async function runEnvironmentTest(
   } catch (err) {
     checks.push({
       code: "pi_cwd_invalid",
+      ...(isAdapterExecutionTargetUnavailableError(err) ? { retryable: true } : {}),
       level: "error",
       message: err instanceof Error ? err.message : "Invalid working directory",
       detail: cwd,
@@ -178,6 +180,7 @@ async function runEnvironmentTest(
     } catch (err) {
       checks.push({
         code: "pi_command_unresolvable",
+        ...(isAdapterExecutionTargetUnavailableError(err) ? { retryable: true } : {}),
         level: "error",
         message: err instanceof Error ? err.message : "Command is not executable",
         detail: command,

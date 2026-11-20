@@ -114,11 +114,9 @@ export function isAiRoutingCompatible(
     ].includes(harness);
   if (route.protocol === "responses") return harness === "codex_local";
   if (route.protocol === "messages") return harness === "claude_local";
-  // Pi reaches local endpoints through its generated provider config; custom
-  // gateways stay on OpenCode and Hermes.
-  return harness === "pi_local"
-    ? route.kind === "local"
-    : ["opencode_local", "hermes_local"].includes(harness);
+  // Pi reaches local endpoints and OpenAI-compatible gateways (for example
+  // Switchyard) through its generated provider config.
+  return ["opencode_local", "pi_local", "hermes_local"].includes(harness);
 }
 export function aiRoutingBaseUrl(
   route: AiProviderRouting,

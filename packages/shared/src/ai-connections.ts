@@ -147,6 +147,11 @@ export function isAiConnectionCompatible(
   if ("routing" in requirement && requirement.routing) return requirement.method === "api_key" && isAiRoutingCompatible(requirement.routing, adapterType);
   // A fixed binding contains identity only. The service checks authoritative
   // connection metadata before resolving credentials or running the harness.
+  // A fixed API-key binding may point at a routed endpoint (gateway or local),
+  // whose model IDs carry the route prefix rather than the provider. The
+  // service re-checks the stored routing metadata before running the harness.
+  if (adapterType === "pi_local" && "mode" in requirement && requirement.mode !== "responsible_user" && requirement.method === "api_key")
+    return true;
   if (adapterType === "pi_local") return (requirement.method === "api_key" || ("mode" in requirement && requirement.mode === "responsible_user"))
     && ["openrouter", "openai", "anthropic", "google"].includes(requirement.provider)
     && typeof model === "string" && model.startsWith(`${requirement.provider}/`);

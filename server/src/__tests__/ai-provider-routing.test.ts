@@ -20,7 +20,14 @@ describe("provider routing", () => {
     const projected = managedProviderRouting(routing, "pi_local", "selected-pi-key", "anthropic/model");
     expect(projected).toMatchObject({ config: { model: "openrouter/anthropic/model" }, env: { OPENROUTER_API_KEY: "selected-pi-key" } });
     expect(projected.env).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
-    expect(isAiConnectionCompatible({ provider: "openai", method: "api_key", routing: aiProviderRoutingSchema.parse({ kind: "gateway", protocol: "chat", baseUrl: "https://gateway.example/v1" }) }, "pi_local", "custom/model")).toBe(false);
+    expect(isAiConnectionCompatible({ provider: "openai", method: "api_key", routing: aiProviderRoutingSchema.parse({ kind: "gateway", protocol: "chat", baseUrl: "https://gateway.example/v1" }) }, "pi_local", "paperclip/custom-model")).toBe(true);
+    expect(isAiConnectionCompatible({ provider: "openai", method: "api_key", routing: aiProviderRoutingSchema.parse({ kind: "gateway", protocol: "responses", baseUrl: "https://gateway.example/v1" }) }, "pi_local", "paperclip/custom-model")).toBe(false);
+  });
+  it("lets a fixed Pi API-key binding to a routed endpoint pass the identity check", () => {
+    // The binding has no routing; the service re-checks the stored connection metadata.
+    const binding = { mode: "delegated", provider: "openai", method: "api_key", connectionId: "00000000-0000-4000-8000-000000000001", grantId: "00000000-0000-4000-8000-000000000002" } as const;
+    expect(isAiConnectionCompatible(binding, "pi_local", "paperclip/switchyard/model")).toBe(true);
+    expect(isAiConnectionCompatible({ mode: "responsible_user", provider: "openai" } as never, "pi_local", "paperclip/switchyard/model")).toBe(false);
   });
   it.each(["openai", "anthropic", "google", "openrouter"] as const)("accepts Pi %s API keys only for matching models", provider => {
     expect(isAiConnectionCompatible({ provider, method: "api_key" }, "paperclip_runner", `${provider}/model`, "acpx", "pi")).toBe(true);

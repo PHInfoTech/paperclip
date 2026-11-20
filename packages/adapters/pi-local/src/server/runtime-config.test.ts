@@ -1,4 +1,6 @@
+import http from "node:http";
 import fs from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { preparePiRuntimeConfig } from "./runtime-config.js";
@@ -267,5 +269,72 @@ describe("preparePiRuntimeConfig served-model discovery", () => {
       await prepared.cleanup();
       server.close();
     }
+  });
+
+  describe("context limits from the endpoint", () => {
+    async function withEndpoint(body: unknown, run: (baseUrl: string) => Promise<void>) {
+      const server = http.createServer((_req, res) => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(body));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      try {
+        await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    }
+
+    async function modelsFor(provider: Record<string, unknown>) {
+      const prepared = await preparePiRuntimeConfig({
+        env: { PAPERCLIP_PI_PROVIDERS: JSON.stringify({ paperclip: { api: "openai-completions", ...provider } }) },
+      });
+      const agentConfigDir = prepared.env.PI_CODING_AGENT_DIR;
+      cleanupPaths.add(agentConfigDir);
+      const written = await readModelsJson(agentConfigDir) as { providers: { paperclip: { models: unknown[] } } };
+      await prepared.cleanup();
+      cleanupPaths.delete(agentConfigDir);
+      return written.providers.paperclip.models;
+    }
+
+    const served = {
+      data: [
+        { id: "small", context_length: 65536 },
+        { id: "large", context_length: 1048576 },
+        { id: "unknown" },
+      ],
+    };
+
+    it("applies each listed model's reported window with a matching output budget", async () => {
+      await withEndpoint(served, async (baseUrl) => {
+        await expect(modelsFor({ baseUrl, models: [{ id: "small" }] }))
+          .resolves.toEqual([{ id: "small", contextWindow: 65536, maxTokens: 8192 }]);
+        await expect(modelsFor({ baseUrl, models: [{ id: "large" }] }))
+          .resolves.toEqual([{ id: "large", contextWindow: 1048576, maxTokens: 16384 }]);
+      });
+    });
+
+    it("applies reported windows to discovered models and leaves unreported ones to Pi", async () => {
+      await withEndpoint(served, async (baseUrl) => {
+        await expect(modelsFor({ baseUrl })).resolves.toEqual([
+          { id: "small", contextWindow: 65536, maxTokens: 8192 },
+          { id: "large", contextWindow: 1048576, maxTokens: 16384 },
+          { id: "unknown" },
+        ]);
+      });
+    });
+
+    it("keeps explicit limits and listed models the endpoint does not report", async () => {
+      await withEndpoint(served, async (baseUrl) => {
+        await expect(modelsFor({
+          baseUrl,
+          models: [{ id: "small", maxTokens: 4096 }, { id: "large", contextWindow: 32000 }, { id: "absent" }],
+        })).resolves.toEqual([
+          { id: "small", contextWindow: 65536, maxTokens: 4096 },
+          { id: "large", contextWindow: 32000 },
+          { id: "absent" },
+        ]);
+      });
+    });
   });
 });

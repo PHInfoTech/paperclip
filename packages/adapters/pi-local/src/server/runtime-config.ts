@@ -88,13 +88,46 @@ function parseProviderConfig(
   }
 }
 
+// Pi sizes a request's output budget from maxTokens and starts compacting at
+// contextWindow - reserveTokens (16384 by default). Capping the output budget at
+// an eighth of a small window leaves room between the two, so a prompt that grows
+// past the compaction threshold can still be answered instead of overflowing.
+const PI_DEFAULT_MAX_TOKENS = 16_384;
+
+type ServedModel = { id: string; contextWindow: number | null };
+
+function parseServedModels(body: unknown): ServedModel[] {
+  const data = isPlainObject(body) && Array.isArray(body.data) ? body.data : [];
+  return data.flatMap((entry) => {
+    if (!isPlainObject(entry) || typeof entry.id !== "string") return [];
+    const size = entry.context_length;
+    const contextWindow = typeof size === "number" && Number.isSafeInteger(size) && size > 0 ? size : null;
+    return [{ id: entry.id, contextWindow }];
+  });
+}
+
+function withServedLimits(model: Record<string, unknown>, contextWindow: number | null): Record<string, unknown> {
+  if (contextWindow === null || model.contextWindow !== undefined) return model;
+  return {
+    ...model,
+    contextWindow,
+    ...(model.maxTokens === undefined
+      ? { maxTokens: Math.min(PI_DEFAULT_MAX_TOKENS, Math.floor(contextWindow / 8)) }
+      : {}),
+  };
+}
+
 // An OpenAI-compatible provider that lists no models gets them from its own
 // `GET <baseUrl>/models`, so a gateway such as Switchyard stays the single source
-// of truth for which models exist. Failures leave the provider unchanged.
+// of truth for which models exist. Models it does list keep their explicit limits;
+// any that lack a context window take the one the endpoint reports, because Pi
+// otherwise assumes 128000 and never compacts below that. Failures leave the
+// provider unchanged.
 async function fillServedModels(providers: Record<string, unknown>, notes: string[]): Promise<void> {
   await Promise.all(Object.entries(providers).map(async ([name, provider]) => {
     if (!isPlainObject(provider) || typeof provider.baseUrl !== "string" || provider.api !== "openai-completions") return;
-    if (Array.isArray(provider.models) && provider.models.length > 0) return;
+    const listed = Array.isArray(provider.models) ? provider.models : [];
+    if (listed.length > 0 && listed.every((model) => !isPlainObject(model) || model.contextWindow !== undefined)) return;
     try {
       const headers: Record<string, string> = {};
       if (typeof provider.apiKey === "string" && provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
@@ -103,12 +136,20 @@ async function fillServedModels(providers: Record<string, unknown>, notes: strin
         signal: AbortSignal.timeout(5_000),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body: unknown = await response.json();
-      const data = isPlainObject(body) && Array.isArray(body.data) ? body.data : [];
-      const ids = data.flatMap((entry) => (isPlainObject(entry) && typeof entry.id === "string" ? [entry.id] : []));
-      if (ids.length === 0) throw new Error("no models listed");
-      provider.models = ids.map((id) => ({ id }));
-      notes.push(`Pi provider "${name}": discovered ${ids.length} model(s) from ${provider.baseUrl}/models.`);
+      const served = parseServedModels(await response.json());
+      if (served.length === 0) throw new Error("no models listed");
+      if (listed.length === 0) {
+        provider.models = served.map(({ id, contextWindow }) => withServedLimits({ id }, contextWindow));
+        notes.push(`Pi provider "${name}": discovered ${served.length} model(s) from ${provider.baseUrl}/models.`);
+        return;
+      }
+      const windows = new Map(served.map(({ id, contextWindow }) => [id, contextWindow]));
+      provider.models = listed.map((model) => {
+        if (!isPlainObject(model) || typeof model.id !== "string") return model;
+        const limited = withServedLimits(model, windows.get(model.id) ?? null);
+        if (limited !== model) notes.push(`Pi provider "${name}": model ${model.id} uses context window ${String(limited.contextWindow)} from ${provider.baseUrl}/models.`);
+        return limited;
+      });
     } catch (err) {
       notes.push(`Pi provider "${name}": could not list models from ${provider.baseUrl}/models (${err instanceof Error ? err.message : String(err)}).`);
     }

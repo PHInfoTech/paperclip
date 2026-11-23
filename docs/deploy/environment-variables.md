@@ -196,8 +196,10 @@ These are set automatically by the server when invoking agents:
 |----------|-------------|
 | `PAPERCLIP_AGENT_ID` | Agent's unique ID |
 | `PAPERCLIP_COMPANY_ID` | Company ID |
-| `PAPERCLIP_API_URL` | Paperclip API base URL (inherits the server-level value; see Server Configuration above) |
+| `PAPERCLIP_API_URL` | Run-reachable Paperclip API base URL. Host-local adapters usually receive the server value. Sandbox-backed local and native runs receive a run-scoped bridge URL instead. Use the injected value unchanged. |
 | `PAPERCLIP_API_KEY` | Short-lived JWT for API auth |
+| `PAPERCLIP_GITHUB_BROKER_URL` | Run-scoped managed GitHub credential broker URL. Local and sandbox-backed runs can receive a loopback bridge on a non-default port. Use the injected value unchanged. |
+| `PAPERCLIP_GITHUB_BROKER_TOKEN` | Run-scoped capability for the managed GitHub credential broker. Do not log or persist it. |
 | `PAPERCLIP_RUN_ID` | Current heartbeat run ID |
 | `PAPERCLIP_TASK_ID` | Issue that triggered this wake |
 | `PAPERCLIP_WAKE_REASON` | Wake trigger reason |
@@ -205,6 +207,21 @@ These are set automatically by the server when invoking agents:
 | `PAPERCLIP_APPROVAL_ID` | Resolved approval ID |
 | `PAPERCLIP_APPROVAL_STATUS` | Approval decision |
 | `PAPERCLIP_LINKED_ISSUE_IDS` | Comma-separated linked issue IDs |
+
+### Local runner callback URLs
+
+An agent must use the exact `PAPERCLIP_API_URL` and
+`PAPERCLIP_GITHUB_BROKER_URL` values in its process environment. Do not replace
+them with the board's public URL. Do not hard-code `127.0.0.1:3100` in agent
+code. A sandbox's loopback interface is not the Paperclip host, and a run bridge
+can use a different loopback port.
+
+On the Paperclip host, the default local control-plane address is
+`http://127.0.0.1:3100`. The listen port can differ when
+`PAPERCLIP_LISTEN_PORT` or `PORT` is set. Run bridges forward agent API and
+managed GitHub requests to this local listen origin. This keeps local runs
+working when the configured public board URL is not reachable from the host or
+the sandbox.
 
 ## LLM Provider Keys (for adapters)
 

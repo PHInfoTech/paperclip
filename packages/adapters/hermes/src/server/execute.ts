@@ -53,6 +53,7 @@ import {
   detectModel,
   resolveProvider,
 } from "./detect-model.js";
+import { materializeHermesRuntimeMcp } from "./runtime-mcp.js";
 import { reconcileHermesPaperclipSkills } from "./skills.js";
 import { prepareHermesMcpHome } from "./mcp-home.js";
 
@@ -382,6 +383,24 @@ export async function execute(
       await ctx.onLog("stderr", `[hermes] Cannot start without the required Paperclip-managed skills: ${reason}\n`);
       throw err;
     }
+  }
+
+  // Hermes discovers MCP servers only from config.yaml, so the run-scoped
+  // gateways Paperclip assigned to this run must be written there.
+  const runtimeMcp = await materializeHermesRuntimeMcp({
+    config,
+    servers: ctx.runtimeMcp?.getServers() ?? [],
+  });
+  if (runtimeMcp.status === "written") {
+    await ctx.onLog(
+      "stdout",
+      `[hermes] Configured ${runtimeMcp.serverNames.length} Paperclip-managed MCP server(s) (${runtimeMcp.serverNames.join(", ")}) in ${runtimeMcp.configPath}\n`,
+    );
+  } else if (runtimeMcp.status === "skipped") {
+    await ctx.onLog(
+      "stdout",
+      "[hermes] Warning: Paperclip-managed MCP servers were not configured because this agent does not use a Paperclip-managed Hermes home.\n",
+    );
   }
 
   // ── Resolve provider (defense in depth) ────────────────────────────────
